@@ -25,5 +25,9 @@ class ClaudeExecutionError(PipelineError):
     """Falha na execução do Claude Code."""
 
 
+class PipelineCancelled(PipelineError):
+    """Execução cancelada pelo usuário."""
+
+
 class DocumentationError(PipelineError):
     """Falha ao gerar o documento Markdown do card."""

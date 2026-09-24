@@ -103,6 +103,7 @@
   .steps li.failed { color: var(--err); }
   .steps li.failed .dot { background: var(--err); border-color: var(--err); color: var(--surface); }
   .steps li.skipped { text-decoration: line-through; }
+  .steps li.cancelled .dot { background: var(--muted); border-color: var(--muted); color: var(--surface); }
   @keyframes spin { to { transform: rotate(360deg); } }
   @media (prefers-reduced-motion: reduce) { .steps li.running .dot { animation: none; border-top-color: var(--run); } }
 
@@ -116,6 +117,20 @@
     overflow-wrap: anywhere;
   }
 
+  .notice {
+    margin-top: 12px;
+    background: var(--surface-2);
+    color: var(--text);
+    border-radius: 8px;
+    padding: 10px 12px;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+  .run-actions { display: flex; justify-content: flex-end; margin-top: 10px; }
+  .run-actions button {
+    background: transparent; color: var(--err);
+    border: 1px solid var(--err); padding: 5px 12px; font-size: 13px;
+  }
   .result { margin-top: 14px; border-top: 1px solid var(--border); padding-top: 14px; }
   .facts { display: grid; grid-template-columns: max-content 1fr; gap: 4px 14px; margin: 0 0 14px; font-size: 14px; }
   .facts dt { color: var(--muted); }
@@ -226,7 +241,9 @@
   <div class="user-msg"><small></small><span class="text"></span></div>
   <section class="run">
     <ol class="steps"></ol>
+    <div class="run-actions"><button type="button" class="cancel">Cancelar</button></div>
     <div class="error" hidden></div>
+    <div class="notice" hidden></div>
     <div class="result" hidden>
       <dl class="facts">
         <dt>Classificação</dt><dd><span class="badge" data-f="classification"></span></dd>
@@ -285,7 +302,7 @@ async function loadSteps() {
 function setBusy(value) {
   busy = value;
   sendBtn.disabled = value;
-  sendBtn.textContent = value ? "Executando…" : "Executar";
+  sendBtn.textContent = value ? "Enviando…" : "Executar";
 }
 
 function addRun(message, repo, card, implement) {
@@ -318,7 +335,27 @@ function renderSteps(section, job) {
   for (const li of section.querySelectorAll(".steps li")) {
     const state = job.steps[li.dataset.step] || "";
     li.className = state;
-    $(".dot", li).textContent = { done: "✓", failed: "✕", skipped: "–" }[state] || "";
+    $(".dot", li).textContent = { done: "✓", failed: "✕", skipped: "–", cancelled: "■" }[state] || "";
+  }
+  const btn = $(".cancel", section);
+  if (btn && job.cancel_requested) { btn.disabled = true; btn.textContent = "Cancelando…"; }
+}
+
+function finishRun(section) {
+  $(".run-actions", section)?.remove();
+}
+
+async function cancelRun(section, id) {
+  const btn = $(".cancel", section);
+  btn.disabled = true;
+  btn.textContent = "Cancelando…";
+  try {
+    const res = await fetch(`/api/runs/${id}/cancel`, { method: "POST" });
+    if (!res.ok && res.status !== 409) throw new Error((await res.json()).error || res.statusText);
+  } catch (err) {
+    btn.disabled = false;
+    btn.textContent = "Cancelar";
+    showError(section, `Não foi possível cancelar: ${err.message}`);
   }
 }
 
@@ -366,13 +403,18 @@ async function poll(section, id) {
       job = await res.json();
       if (!res.ok) throw new Error(job.error || res.statusText);
     } catch (err) {
+      finishRun(section);
       showError(section, `Não foi possível consultar a execução: ${err.message}`);
       return;
     }
     renderSteps(section, job);
-    if (job.status === "succeeded") { renderResult(section, job.result); scrollToEnd(); return; }
-    if (job.status === "failed") { showError(section, job.error); scrollToEnd(); return; }
-    await new Promise(r => setTimeout(r, POLL_MS));
+    if (job.status === "running") { await new Promise(r => setTimeout(r, POLL_MS)); continue; }
+    finishRun(section);
+    if (job.status === "succeeded") renderResult(section, job.result);
+    else if (job.status === "cancelled") Object.assign($(".notice", section), { textContent: job.error, hidden: false });
+    else showError(section, job.error);
+    scrollToEnd();
+    return;
   }
 }
 
@@ -385,21 +427,26 @@ async function submit() {
   setBusy(true);
   store("aj.repo", repo);
   const section = addRun(message, repo, card, implement);
+  let job;
   try {
     const res = await fetch("/api/runs", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ message, repo, card, implement }),
     });
-    const job = await res.json();
-    if (!res.ok) { showError(section, job.error || res.statusText); return; }
+    job = await res.json();
+    if (!res.ok) { finishRun(section); showError(section, job.error || res.statusText); return; }
     msgEl.value = "";
-    await poll(section, job.id);
   } catch (err) {
+    finishRun(section);
     showError(section, `Falha de comunicação com o servidor: ${err.message}`);
+    return;
   } finally {
     setBusy(false);
   }
+  // O envio só bloqueia durante o POST: execuções em repositórios diferentes acompanham em paralelo.
+  $(".cancel", section).addEventListener("click", () => cancelRun(section, job.id));
+  poll(section, job.id);
 }
 
 form.addEventListener("submit", e => { e.preventDefault(); submit(); });

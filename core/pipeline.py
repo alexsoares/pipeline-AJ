@@ -8,14 +8,15 @@ a abri-lo depois.
 from __future__ import annotations
 
 import logging
+import threading
 import time
 from collections.abc import Callable
 from typing import Any, TypeVar
 
 from core.classifier import RequestClassifier
-from core.exceptions import PipelineError
+from core.exceptions import GitError, PipelineCancelled, PipelineError
 from core.git_manager import GitManager
-from core.models import PipelineInput, PipelineReport, TokenUsage
+from core.models import GitStatus, PipelineInput, PipelineReport, TokenUsage
 from core.settings import Settings
 from integration.claude_runner import ClaudeCodeRunner
 
@@ -31,7 +32,7 @@ STEPS: dict[int, str] = {
 }
 IMPLEMENT_STEP = 4
 
-# Recebe (número do passo, estado), onde estado é "running", "done", "failed" ou "skipped".
+# Recebe (número do passo, estado): "running", "done", "failed", "skipped" ou "cancelled".
 StepCallback = Callable[[int, str], None]
 
 
@@ -56,6 +57,12 @@ class Pipeline:
         self.classifier = classifier or RequestClassifier(settings.classifier)
         self.runner = runner or ClaudeCodeRunner(settings.claude_code)
         self.on_step = on_step
+        self._cancelled = threading.Event()
+
+    def cancel(self) -> None:
+        """Pede o cancelamento: interrompe o Claude Code, se estiver rodando, e impede os próximos passos."""
+        self._cancelled.set()
+        self.runner.cancel()
 
     def _notify(self, number: int, state: str) -> None:
         if not self.on_step:
@@ -66,10 +73,17 @@ class Pipeline:
             logger.exception("Falha no callback de progresso do passo %d", number)
 
     def _step(self, number: int, action: Callable[[], T]) -> T:
+        if self._cancelled.is_set():
+            self._notify(number, "cancelled")
+            raise PipelineCancelled("Execução cancelada pelo usuário.")
         logger.info("Passo %d: %s", number, STEPS[number])
         self._notify(number, "running")
         try:
             result = action()
+        except PipelineCancelled:
+            logger.warning("Passo %d (%s) cancelado pelo usuário.", number, STEPS[number])
+            self._notify(number, "cancelled")
+            raise
         except PipelineError as exc:
             logger.error("Passo %d (%s) falhou: %s", number, STEPS[number], exc)
             self._notify(number, "failed")
@@ -85,10 +99,22 @@ class Pipeline:
         report = PipelineReport(input=data, implement=implement)
         git = GitManager(data.repo_path, self.settings.git.command_timeout_seconds)
 
+        def check_status() -> GitStatus:
+            status = git.status()
+            if status.dirty_files and implement:
+                # Com o tree limpo, tudo o que o git status mostrar depois do passo 4 é do Claude Code.
+                listed = "\n".join(f"  {line}" for line in status.dirty_files[:10])
+                more = f"\n  … e mais {len(status.dirty_files) - 10}" if len(status.dirty_files) > 10 else ""
+                raise GitError(
+                    f"Há {len(status.dirty_files)} alteração(ões) pendente(s) no repositório:\n{listed}{more}\n"
+                    "Faça commit ou stash antes de implementar com o Claude Code."
+                )
+            if status.dirty_files:
+                logger.warning("Working tree com %d alteração(ões) pendente(s).", len(status.dirty_files))
+            return status
+
         try:
-            report.initial_status = self._step(1, git.status)
-            if report.initial_status.dirty_files:
-                logger.warning("Working tree com %d alteração(ões) pendente(s).", len(report.initial_status.dirty_files))
+            report.initial_status = self._step(1, check_status)
 
             report.classification = self._step(2, lambda: self.classifier.classify(data.request))
 
@@ -106,10 +132,9 @@ class Pipeline:
                 report.changed_files = git.changed_files()
             else:
                 self._notify(IMPLEMENT_STEP, "skipped")
+            self._step(5, lambda: None)
         finally:
             report.elapsed_seconds = time.perf_counter() - started
-
-        self._notify(5, "done")
         return report
 
 

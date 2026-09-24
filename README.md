@@ -10,8 +10,9 @@ Pipeline do Agente AJ. A partir de um card (repositório + número + descrição
 5. **Resposta consolidada**: classificação, branch, tempo e tokens; com implementação, também o resumo do Claude Code,
    os arquivos alterados e o custo.
 
-A escolha é feita a cada execução. O Claude Code nunca faz commit, push nem troca de branch: a revisão e o commit
-ficam com você.
+A escolha é feita a cada execução. Com a implementação ligada, o repositório precisa estar sem alterações pendentes
+(faça commit ou stash antes), assim os arquivos listados no final são só os que o Claude Code alterou. O Claude Code
+nunca faz commit, push nem troca de branch: a revisão e o commit ficam com você.
 
 ## Requisitos
 
@@ -61,8 +62,11 @@ python -m web.app --port 9000
 ```
 
 Mostra o progresso de cada passo em tempo real. A opção **Implementar com o Claude Code** decide se o passo 4
-roda; a escolha fica lembrada no navegador. Roda uma execução por vez e, por padrão, escuta só em `127.0.0.1`,
-pois executa Git na máquina local.
+roda; a escolha fica lembrada no navegador. Cada execução tem um botão **Cancelar**, que encerra o Claude Code na
+hora (as alterações parciais ficam no branch para você revisar ou descartar).
+
+Execuções em repositórios diferentes rodam em paralelo; no mesmo repositório, só uma por vez. Por padrão o servidor
+escuta só em `127.0.0.1`, pois executa Git e o Claude Code na máquina local.
 
 ## Configuração
 

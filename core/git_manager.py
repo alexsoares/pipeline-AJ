@@ -44,6 +44,10 @@ class GitManager:
         if result.returncode != 0 or result.stdout.strip() != "true":
             raise GitError(f"O diretório não é um repositório Git: {self.repo_path}")
 
+    def toplevel(self) -> Path:
+        """Raiz do repositório (a mesma para qualquer subdiretório dele)."""
+        return Path(self._run("rev-parse", "--show-toplevel").stdout.strip()).resolve()
+
     def current_branch(self) -> str:
         branch = self._run("rev-parse", "--abbrev-ref", "HEAD").stdout.strip()
         if branch == "HEAD":
