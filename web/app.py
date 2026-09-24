@@ -4,8 +4,8 @@ Uso:
     python -m web.app              # http://127.0.0.1:8000
     python -m web.app --port 9000
 
-O servidor executa Git e a API da Anthropic (classificador) a partir da máquina local, por isso escuta apenas
-em 127.0.0.1 por padrão. Só uma execução roda por vez: duas pipelines trocando
+O servidor executa Git, a API da Anthropic (classificador) e, se o usuário pedir, o Claude Code a partir da
+máquina local, por isso escuta apenas em 127.0.0.1 por padrão. Só uma execução roda por vez: duas pipelines trocando
 de branch ao mesmo tempo no mesmo repositório se atrapalhariam.
 """
 
@@ -41,6 +41,7 @@ class Job:
     id: str
     card: str
     request: str
+    implement: bool = False
     status: str = "running"  # running | succeeded | failed
     steps: dict[int, str] = field(default_factory=dict)
     failed_step: int | None = None
@@ -52,6 +53,7 @@ class Job:
             "id": self.id,
             "card": self.card,
             "request": self.request,
+            "implement": self.implement,
             "status": self.status,
             "steps": {str(n): state for n, state in self.steps.items()},
             "failed_step": self.failed_step,
@@ -67,11 +69,11 @@ class JobManager:
         self._lock = threading.Lock()
         self._active: str | None = None
 
-    def start(self, data: PipelineInput) -> Job:
+    def start(self, data: PipelineInput, implement: bool = False) -> Job:
         with self._lock:
             if self._active:
                 raise PipelineBusyError(self._active)
-            job = Job(id=uuid.uuid4().hex[:12], card=data.card_number, request=data.request)
+            job = Job(id=uuid.uuid4().hex[:12], card=data.card_number, request=data.request, implement=implement)
             self._jobs[job.id] = job
             self._active = job.id
 
@@ -86,7 +88,7 @@ class JobManager:
             job.steps[number] = state
 
         try:
-            report = Pipeline(self.settings, on_step=on_step).run(data)
+            report = Pipeline(self.settings, on_step=on_step).run(data, implement=job.implement)
             job.result = report_to_dict(report)
             job.status = "succeeded"
         except StepFailed as exc:
@@ -131,7 +133,7 @@ def create_app(settings: Settings | None = None) -> Flask:
             return jsonify({"error": str(exc)}), 400
 
         try:
-            job = jobs.start(data)
+            job = jobs.start(data, implement=body.get("implement") is True)
         except PipelineBusyError:
             return jsonify({"error": "Já existe uma execução em andamento. Aguarde ela terminar."}), 409
         return jsonify(job.to_dict()), 202

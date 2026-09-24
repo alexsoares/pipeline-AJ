@@ -3,6 +3,7 @@
 Uso:
     python main.py "repo: /caminho/do/repo card: 1425 Adicionar endpoint de health check"
     python main.py --repo /caminho/do/repo --card 1425 "Adicionar endpoint de health check"
+    python main.py --implementar --repo /caminho/do/repo --card 1425 "..."   # já implementa via Claude Code
 """
 
 from __future__ import annotations
@@ -27,6 +28,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("message", nargs="*", help="Mensagem do chat (descrição da tarefa)")
     parser.add_argument("--repo", help="Caminho absoluto ou relativo do repositório")
     parser.add_argument("--card", help="Número do card/tarefa")
+    parser.add_argument(
+        "--implementar",
+        action="store_true",
+        help="Implementa o card com o Claude Code (headless) no branch preparado, em vez de só orientar",
+    )
     return parser.parse_args(argv)
 
 
@@ -43,7 +49,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         settings = load_settings()
         setup_logging(settings.logging)
-        report = Pipeline(settings).run(data)
+        report = Pipeline(settings).run(data, implement=args.implementar)
     except PipelineError as exc:
         print(f"❌ {exc}", file=sys.stderr)
         return EXIT_PIPELINE_ERROR

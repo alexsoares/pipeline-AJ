@@ -16,7 +16,7 @@ claude_code:
   model: null                  # null = modelo padrão do Claude Code
   # auto: edita arquivos e roda comandos (testes, build) com checagem de segurança por comando.
   # acceptEdits: só edita arquivos. bypassPermissions: libera tudo, sem checagem (evitar).
-  permission_mode: auto
+  permission_mode: acceptEdits
   timeout_seconds: 1800
 
 documentation:

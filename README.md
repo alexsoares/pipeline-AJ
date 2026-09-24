@@ -5,15 +5,20 @@ Pipeline do Agente AJ. A partir de um card (repositório + número + descrição
 1. **Status do Git**: confirma que o caminho é um repositório e lista as alterações pendentes.
 2. **Classificação**: um LLM leve classifica a solicitação como `feature`, `hotfix` ou `release`.
 3. **Branch**: se você estiver em `main`/`master`, cria (ou reaproveita) o branch `<classificação>/card-<n>`.
-4. **Resposta consolidada**: relatório com classificação, branch, tempo e tokens consumidos.
+4. **Implementação (opcional)**: roda o Claude Code em modo headless no branch do card. Desligada, o passo é pulado
+   e a pipeline só avisa para você abrir o Claude Code.
+5. **Resposta consolidada**: classificação, branch, tempo e tokens; com implementação, também o resumo do Claude Code,
+   os arquivos alterados e o custo.
 
-A implementação do card é feita depois, no Claude Code, já no branch preparado.
+A escolha é feita a cada execução. O Claude Code nunca faz commit, push nem troca de branch: a revisão e o commit
+ficam com você.
 
 ## Requisitos
 
 - Python 3.10+
 - Git no `PATH`
 - Chave da API da Anthropic (usada pelo classificador)
+- [Claude Code](https://claude.com/claude-code) instalado e autenticado, apenas para usar a implementação (passo 4)
 
 ## Instalação
 
@@ -34,6 +39,9 @@ python main.py --repo /caminho/do/repo --card 1425 "Adicionar endpoint de health
 
 # ou com repositório e card embutidos na mensagem
 python main.py "repo: /caminho/do/repo card: 1425 Adicionar endpoint de health check"
+
+# prepara o branch e já implementa com o Claude Code
+python main.py --implementar --repo /caminho/do/repo --card 1425 "Adicionar endpoint de health check"
 ```
 
 Sem repositório **e** número do card, a pipeline não executa nada.
@@ -52,7 +60,8 @@ python -m web.app               # http://127.0.0.1:8000
 python -m web.app --port 9000
 ```
 
-Mostra o progresso de cada passo em tempo real. Roda uma execução por vez e, por padrão, escuta só em `127.0.0.1`,
+Mostra o progresso de cada passo em tempo real. A opção **Implementar com o Claude Code** decide se o passo 4
+roda; a escolha fica lembrada no navegador. Roda uma execução por vez e, por padrão, escuta só em `127.0.0.1`,
 pois executa Git na máquina local.
 
 ## Configuração
@@ -63,9 +72,10 @@ pois executa Git na máquina local.
 |---|---|
 | `git` | branches protegidos (onde a pipeline cria o branch do card) e timeout dos comandos |
 | `classifier` | modelo, `max_tokens` e timeout do classificador |
+| `claude_code` | executável, modelo, modo de permissão e timeout do Claude Code (passo 4) |
 | `logging` | nível e arquivo de log (padrão `logs/pipeline.log`) |
 
-As seções `claude_code` e `documentation` pertencem a módulos ainda não integrados à pipeline.
+A seção `documentation` pertence a um módulo ainda não integrado à pipeline.
 
 ## Estrutura
 
@@ -73,6 +83,6 @@ As seções `claude_code` e `documentation` pertencem a módulos ainda não inte
 main.py              CLI
 web/                 interface web (Flask + página estática)
 core/                validação, Git, classificador, orquestração dos passos
-integration/         execução do Claude Code em modo headless (ainda não integrada)
+integration/         execução do Claude Code em modo headless (passo 4)
 config/settings.yaml configuração
 ```

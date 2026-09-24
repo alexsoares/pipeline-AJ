@@ -1,7 +1,8 @@
-"""Orquestrador: executa os passos 1 a 3 em sequência e monta o relatório do passo 4.
+"""Orquestrador: executa os passos em sequência e monta o relatório final.
 
-A implementação do card não faz parte da pipeline: ela é feita depois, no Claude Code,
-já no branch preparado aqui.
+A implementação do card (passo 4) é opcional e decidida a cada execução: ou a pipeline
+roda o Claude Code em modo headless no branch preparado, ou apenas orienta o usuário
+a abri-lo depois.
 """
 
 from __future__ import annotations
@@ -16,6 +17,7 @@ from core.exceptions import PipelineError
 from core.git_manager import GitManager
 from core.models import PipelineInput, PipelineReport, TokenUsage
 from core.settings import Settings
+from integration.claude_runner import ClaudeCodeRunner
 
 logger = logging.getLogger(__name__)
 T = TypeVar("T")
@@ -24,10 +26,12 @@ STEPS: dict[int, str] = {
     1: "status do Git",
     2: "classificação da solicitação",
     3: "preparação do branch",
-    4: "resposta consolidada",
+    4: "implementação no Claude Code",
+    5: "resposta consolidada",
 }
+IMPLEMENT_STEP = 4
 
-# Recebe (número do passo, estado), onde estado é "running", "done" ou "failed".
+# Recebe (número do passo, estado), onde estado é "running", "done", "failed" ou "skipped".
 StepCallback = Callable[[int, str], None]
 
 
@@ -45,10 +49,12 @@ class Pipeline:
         self,
         settings: Settings,
         classifier: RequestClassifier | None = None,
+        runner: ClaudeCodeRunner | None = None,
         on_step: StepCallback | None = None,
     ) -> None:
         self.settings = settings
         self.classifier = classifier or RequestClassifier(settings.classifier)
+        self.runner = runner or ClaudeCodeRunner(settings.claude_code)
         self.on_step = on_step
 
     def _notify(self, number: int, state: str) -> None:
@@ -74,9 +80,9 @@ class Pipeline:
         self._notify(number, "done")
         return result
 
-    def run(self, data: PipelineInput) -> PipelineReport:
+    def run(self, data: PipelineInput, implement: bool = False) -> PipelineReport:
         started = time.perf_counter()
-        report = PipelineReport(input=data)
+        report = PipelineReport(input=data, implement=implement)
         git = GitManager(data.repo_path, self.settings.git.command_timeout_seconds)
 
         try:
@@ -90,15 +96,25 @@ class Pipeline:
             report.branch = self._step(
                 3, lambda: git.ensure_work_branch(branch_name, self.settings.git.protected_branches)
             )
+
+            if implement:
+                classification = report.classification.classification
+                report.claude = self._step(
+                    IMPLEMENT_STEP,
+                    lambda: self.runner.run(data.repo_path, data.card_number, classification, data.request),
+                )
+                report.changed_files = git.changed_files()
+            else:
+                self._notify(IMPLEMENT_STEP, "skipped")
         finally:
             report.elapsed_seconds = time.perf_counter() - started
 
-        self._notify(4, "done")
+        self._notify(5, "done")
         return report
 
 
 def format_report(report: PipelineReport) -> str:
-    """Passo 4: resposta consolidada para o chat."""
+    """Passo 5: resposta consolidada para o chat."""
     usage = report.total_usage
     branch = report.branch
     branch_info = f"{branch.name} ({'criado' if branch.created else 'existente'})" if branch else "-"
@@ -109,8 +125,25 @@ def format_report(report: PipelineReport) -> str:
         f"Classificação : {report.classification.classification if report.classification else '-'}",
         f"Branch        : {branch_info}",
         "",
-        "--- Próximo passo ---",
-        "Abra o Claude Code no repositório e implemente o card nesse branch.",
+    ]
+    if report.claude:
+        files = [f"  {line}" for line in report.changed_files] or ["  (nenhum arquivo alterado)"]
+        lines += [
+            "--- Resumo do Claude Code ---",
+            report.claude.output or "(sem resumo)",
+            "",
+            "--- Arquivos alterados (git status) ---",
+            *files,
+            "",
+            "--- Próximo passo ---",
+            "Revise as alterações no branch e faça o commit.",
+        ]
+    else:
+        lines += [
+            "--- Próximo passo ---",
+            "Abra o Claude Code no repositório e implemente o card nesse branch.",
+        ]
+    lines += [
         "",
         "--- Métricas ---",
         f"Tempo total       : {report.elapsed_seconds:.2f} s",
@@ -118,6 +151,8 @@ def format_report(report: PipelineReport) -> str:
         f"Tokens de saída   : {usage.output_tokens}",
         f"Tokens totais     : {usage.total}",
     ]
+    if report.claude and report.claude.cost_usd is not None:
+        lines.append(f"Custo Claude Code : US$ {report.claude.cost_usd:.4f}")
     return "\n".join(lines)
 
 
@@ -135,14 +170,26 @@ def _usage_to_dict(usage: TokenUsage | None) -> dict[str, int] | None:
 
 
 def report_to_dict(report: PipelineReport) -> dict[str, Any]:
-    """Passo 4 em formato estruturado (JSON) para a interface web."""
+    """Passo 5 em formato estruturado (JSON) para a interface web."""
+    claude = report.claude
     return {
         "card": report.input.card_number,
         "repo": str(report.input.repo_path),
         "request": report.input.request,
         "classification": report.classification.classification if report.classification else None,
         "branch": {"name": report.branch.name, "created": report.branch.created} if report.branch else None,
+        "implement": report.implement,
+        "claude": {
+            "output": claude.output,
+            "duration_seconds": round(claude.duration_seconds, 2),
+            "cost_usd": claude.cost_usd,
+        } if claude else None,
+        "changed_files": report.changed_files,
         "elapsed_seconds": round(report.elapsed_seconds, 2),
-        "tokens": {"total": _usage_to_dict(report.total_usage)},
+        "tokens": {
+            "total": _usage_to_dict(report.total_usage),
+            "classifier": _usage_to_dict(report.classification.usage if report.classification else None),
+            "claude": _usage_to_dict(claude.usage if claude else None),
+        },
         "text": format_report(report),
     }

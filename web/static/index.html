@@ -102,6 +102,7 @@
   .steps li.done .dot { background: var(--ok); border-color: var(--ok); color: var(--surface); }
   .steps li.failed { color: var(--err); }
   .steps li.failed .dot { background: var(--err); border-color: var(--err); color: var(--surface); }
+  .steps li.skipped { text-decoration: line-through; }
   @keyframes spin { to { transform: rotate(360deg); } }
   @media (prefers-reduced-motion: reduce) { .steps li.running .dot { animation: none; border-top-color: var(--run); } }
 
@@ -170,6 +171,10 @@
   button:disabled { opacity: .5; cursor: not-allowed; }
   .hint { font-size: 12px; color: var(--muted); margin-top: 6px; }
   .hint code { font-family: var(--mono); }
+  .options { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; font-size: 14px; }
+  .options input { width: auto; margin: 0; accent-color: var(--accent); }
+  .options label { font-size: 14px; color: var(--text); margin: 0; cursor: pointer; }
+  .options .hint { margin: 0; }
 
   @media (max-width: 560px) {
     .fields { grid-template-columns: 1fr; }
@@ -182,7 +187,7 @@
 <header>
   <div class="inner">
     <h1>Agente AJ</h1>
-    <p>Descreva a tarefa do card. A pipeline classifica e prepara o branch; a implementação é feita depois, no Claude Code.</p>
+    <p>Descreva a tarefa do card. A pipeline classifica e prepara o branch; a implementação pode ser feita aqui, pelo Claude Code, ou depois, por você.</p>
   </div>
 </header>
 
@@ -204,6 +209,11 @@
         <input id="card" placeholder="1425" inputmode="numeric">
       </div>
     </div>
+    <div class="options">
+      <input type="checkbox" id="implement">
+      <label for="implement">Implementar com o Claude Code</label>
+      <span class="hint" id="implement-hint">desligado: a pipeline só prepara o branch e avisa</span>
+    </div>
     <div class="compose">
       <textarea id="message" rows="2" placeholder="Ex.: Adicionar endpoint de health check"></textarea>
       <button id="send" type="submit">Executar</button>
@@ -222,13 +232,20 @@
         <dt>Classificação</dt><dd><span class="badge" data-f="classification"></span></dd>
         <dt>Branch</dt><dd><code data-f="branch"></code></dd>
       </dl>
-      <p class="note">Próximo passo: abra o Claude Code no repositório e implemente o card nesse branch.</p>
+      <p class="note" data-f="next"></p>
+      <div data-f="claude-box" hidden>
+        <h3>Resumo do Claude Code</h3>
+        <pre class="output" data-f="claude-output"></pre>
+        <h3>Arquivos alterados</h3>
+        <ul class="files" data-f="files"></ul>
+      </div>
       <h3>Métricas</h3>
       <div class="metrics">
         <div class="metric"><div class="label">Tempo total</div><div class="value" data-f="elapsed"></div></div>
         <div class="metric"><div class="label">Tokens de entrada</div><div class="value" data-f="in"></div></div>
         <div class="metric"><div class="label">Tokens de saída</div><div class="value" data-f="out"></div></div>
         <div class="metric"><div class="label">Tokens totais</div><div class="value" data-f="total"></div></div>
+        <div class="metric" data-f="cost-box" hidden><div class="label">Custo Claude Code</div><div class="value" data-f="cost"></div></div>
       </div>
     </div>
   </section>
@@ -240,18 +257,28 @@ const fmt = new Intl.NumberFormat("pt-BR");
 const POLL_MS = 1000;
 
 const form = $("#form"), repoEl = $("#repo"), cardEl = $("#card"), msgEl = $("#message"), sendBtn = $("#send");
+const implementEl = $("#implement"), implementHint = $("#implement-hint");
 let steps = [];
 let busy = false;
 
 function store(key, value) { try { localStorage.setItem(key, value); } catch {} }
 function recall(key) { try { return localStorage.getItem(key) || ""; } catch { return ""; } }
 repoEl.value = recall("aj.repo");
+implementEl.checked = recall("aj.implement") === "1";
+
+function renderImplementHint() {
+  implementHint.textContent = implementEl.checked
+    ? "ligado: o Claude Code edita o repositório no branch do card (pode levar alguns minutos)"
+    : "desligado: a pipeline só prepara o branch e avisa";
+}
+implementEl.addEventListener("change", () => { store("aj.implement", implementEl.checked ? "1" : "0"); renderImplementHint(); });
+renderImplementHint();
 
 async function loadSteps() {
   try {
     steps = await (await fetch("/api/steps")).json();
   } catch {
-    steps = [1, 2, 3, 4].map(n => ({ number: n, name: `Passo ${n}` }));
+    steps = [1, 2, 3, 4, 5].map(n => ({ number: n, name: `Passo ${n}` }));
   }
 }
 
@@ -261,10 +288,10 @@ function setBusy(value) {
   sendBtn.textContent = value ? "Executando…" : "Executar";
 }
 
-function addRun(message, repo, card) {
+function addRun(message, repo, card, implement) {
   $("#empty")?.remove();
   const frag = $("#run-tpl").content.cloneNode(true);
-  const header = [card && `Card ${card}`, repo].filter(Boolean).join(" · ");
+  const header = [card && `Card ${card}`, repo, implement && "com Claude Code"].filter(Boolean).join(" · ");
   $(".user-msg small", frag).textContent = header;
   $(".user-msg .text", frag).textContent = message;
 
@@ -291,7 +318,7 @@ function renderSteps(section, job) {
   for (const li of section.querySelectorAll(".steps li")) {
     const state = job.steps[li.dataset.step] || "";
     li.className = state;
-    $(".dot", li).textContent = state === "done" ? "✓" : state === "failed" ? "✕" : "";
+    $(".dot", li).textContent = { done: "✓", failed: "✕", skipped: "–" }[state] || "";
   }
 }
 
@@ -306,6 +333,21 @@ function renderResult(section, r) {
   const f = name => $(`[data-f="${name}"]`, box);
   f("classification").textContent = r.classification ?? "-";
   f("branch").textContent = r.branch ? `${r.branch.name} (${r.branch.created ? "criado" : "existente"})` : "-";
+  f("next").textContent = r.claude
+    ? "Próximo passo: revise as alterações no branch e faça o commit."
+    : "Próximo passo: abra o Claude Code no repositório e implemente o card nesse branch.";
+
+  if (r.claude) {
+    f("claude-output").textContent = r.claude.output || "(sem resumo)";
+    const files = f("files");
+    files.replaceChildren(...(r.changed_files.length ? r.changed_files : ["(nenhum arquivo alterado)"])
+      .map(line => Object.assign(document.createElement("li"), { textContent: line })));
+    f("claude-box").hidden = false;
+    if (r.claude.cost_usd != null) {
+      f("cost").textContent = `US$ ${r.claude.cost_usd.toLocaleString("pt-BR", { minimumFractionDigits: 4, maximumFractionDigits: 4 })}`;
+      f("cost-box").hidden = false;
+    }
+  }
 
   const t = r.tokens.total;
   f("elapsed").textContent = `${r.elapsed_seconds.toLocaleString("pt-BR", { minimumFractionDigits: 2 })} s`;
@@ -337,16 +379,17 @@ async function poll(section, id) {
 async function submit() {
   if (busy) return;
   const message = msgEl.value.trim(), repo = repoEl.value.trim(), card = cardEl.value.trim();
+  const implement = implementEl.checked;
   if (!message) { msgEl.focus(); return; }
 
   setBusy(true);
   store("aj.repo", repo);
-  const section = addRun(message, repo, card);
+  const section = addRun(message, repo, card, implement);
   try {
     const res = await fetch("/api/runs", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ message, repo, card }),
+      body: JSON.stringify({ message, repo, card, implement }),
     });
     const job = await res.json();
     if (!res.ok) { showError(section, job.error || res.statusText); return; }

@@ -1,4 +1,4 @@
-"""Passo 4: executa as alterações do card via Claude Code em modo headless (`claude -p`)."""
+"""Passo 4 (opcional): executa as alterações do card via Claude Code em modo headless (`claude -p`)."""
 
 from __future__ import annotations
 
@@ -53,6 +53,7 @@ class ClaudeCodeRunner:
             proc = subprocess.run(
                 cmd,
                 cwd=repo_path,
+                stdin=subprocess.DEVNULL,  # sem terminal: o Claude Code não pode ficar esperando entrada
                 capture_output=True,
                 text=True,
                 timeout=self.settings.timeout_seconds,

@@ -72,6 +72,7 @@ class ClaudeRunResult:
 @dataclass
 class PipelineReport:
     input: PipelineInput
+    implement: bool = False
     initial_status: GitStatus | None = None
     classification: ClassificationResult | None = None
     branch: BranchResult | None = None
