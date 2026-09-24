@@ -1,0 +1,27 @@
+# Configuração da pipeline do Agente AJ.
+# Credenciais NÃO ficam aqui: ficam no arquivo .env da raiz (veja .env.example),
+# carregado automaticamente. Variáveis já exportadas no shell têm precedência.
+
+git:
+  protected_branches: [main, master]
+  command_timeout_seconds: 30
+
+classifier:
+  model: claude-haiku-4-5
+  max_tokens: 16
+  timeout_seconds: 30
+
+claude_code:
+  binary: claude
+  model: null                  # null = modelo padrão do Claude Code
+  # auto: edita arquivos e roda comandos (testes, build) com checagem de segurança por comando.
+  # acceptEdits: só edita arquivos. bypassPermissions: libera tudo, sem checagem (evitar).
+  permission_mode: auto
+  timeout_seconds: 1800
+
+documentation:
+  filename_template: "CARD-{card}.md"
+
+logging:
+  level: INFO
+  file: logs/pipeline.log

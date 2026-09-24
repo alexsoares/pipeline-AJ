@@ -1,0 +1,370 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Agente AJ</title>
+<style>
+  :root {
+    --bg: #f6f7f9;
+    --surface: #ffffff;
+    --surface-2: #f0f2f5;
+    --border: #dfe3e8;
+    --text: #1b1f24;
+    --muted: #5f6b7a;
+    --accent: #2f6fde;
+    --accent-text: #ffffff;
+    --ok: #1f8a4c;
+    --ok-bg: #e6f4ec;
+    --err: #c62f2f;
+    --err-bg: #fbeaea;
+    --run: #b7791f;
+    --user-bg: #2f6fde;
+    --user-text: #ffffff;
+    --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #111418;
+      --surface: #1a1e24;
+      --surface-2: #232830;
+      --border: #2f3640;
+      --text: #e6e9ed;
+      --muted: #9aa5b3;
+      --accent: #5b8ff0;
+      --accent-text: #0d1117;
+      --ok: #4cc27f;
+      --ok-bg: #16301f;
+      --err: #f07070;
+      --err-bg: #3a1c1c;
+      --run: #e0a54a;
+      --user-bg: #2b4f8f;
+      --user-text: #eef3fc;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font: 15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    display: flex;
+    flex-direction: column;
+    height: 100dvh;
+  }
+  header {
+    padding: 14px 16px;
+    border-bottom: 1px solid var(--border);
+    background: var(--surface);
+  }
+  header h1 { margin: 0; font-size: 17px; }
+  header p { margin: 2px 0 0; color: var(--muted); font-size: 13px; }
+
+  #transcript {
+    flex: 1;
+    overflow-y: auto;
+    padding: 20px 16px;
+  }
+  .inner { max-width: 860px; margin: 0 auto; }
+  .empty { color: var(--muted); text-align: center; margin-top: 12vh; }
+
+  .user-msg {
+    margin: 0 0 12px auto;
+    max-width: 80%;
+    width: fit-content;
+    background: var(--user-bg);
+    color: var(--user-text);
+    padding: 10px 14px;
+    border-radius: 14px 14px 4px 14px;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+  .user-msg small { display: block; opacity: .8; font-size: 12px; margin-bottom: 2px; }
+
+  .run {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 14px 16px;
+    margin-bottom: 24px;
+  }
+  .steps { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+  .steps li { display: flex; align-items: center; gap: 10px; color: var(--muted); font-size: 14px; }
+  .steps .dot {
+    width: 20px; height: 20px; border-radius: 50%;
+    border: 2px solid var(--border);
+    display: grid; place-items: center;
+    font-size: 11px; font-weight: 700; flex: none;
+  }
+  .steps li.running { color: var(--text); }
+  .steps li.running .dot { border-color: var(--run); border-top-color: transparent; animation: spin 0.9s linear infinite; }
+  .steps li.done { color: var(--text); }
+  .steps li.done .dot { background: var(--ok); border-color: var(--ok); color: var(--surface); }
+  .steps li.failed { color: var(--err); }
+  .steps li.failed .dot { background: var(--err); border-color: var(--err); color: var(--surface); }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  @media (prefers-reduced-motion: reduce) { .steps li.running .dot { animation: none; border-top-color: var(--run); } }
+
+  .error {
+    margin-top: 12px;
+    background: var(--err-bg);
+    color: var(--err);
+    border-radius: 8px;
+    padding: 10px 12px;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+
+  .result { margin-top: 14px; border-top: 1px solid var(--border); padding-top: 14px; }
+  .facts { display: grid; grid-template-columns: max-content 1fr; gap: 4px 14px; margin: 0 0 14px; font-size: 14px; }
+  .facts dt { color: var(--muted); }
+  .facts dd { margin: 0; overflow-wrap: anywhere; }
+  .facts code { font-family: var(--mono); font-size: 13px; }
+  .badge {
+    display: inline-block; padding: 1px 8px; border-radius: 999px;
+    background: var(--surface-2); font-size: 13px; font-weight: 600;
+  }
+  h3 { font-size: 13px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin: 16px 0 6px; }
+  .output {
+    background: var(--surface-2);
+    border-radius: 8px;
+    padding: 12px 14px;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    font-size: 14px;
+    margin: 0;
+  }
+  .files { margin: 0; padding-left: 18px; font-family: var(--mono); font-size: 13px; }
+  .metrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; }
+  .metric { background: var(--surface-2); border-radius: 8px; padding: 10px 12px; }
+  .metric .label { font-size: 12px; color: var(--muted); }
+  .metric .value { font-size: 20px; font-weight: 650; font-variant-numeric: tabular-nums; }
+  .metric .sub { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .note { font-size: 12px; color: var(--muted); margin-top: 8px; }
+
+  form {
+    border-top: 1px solid var(--border);
+    background: var(--surface);
+    padding: 12px 16px 16px;
+  }
+  .fields { display: grid; grid-template-columns: 1fr 140px; gap: 8px; margin-bottom: 8px; }
+  label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 3px; }
+  input, textarea {
+    width: 100%;
+    font: inherit;
+    color: var(--text);
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 8px 10px;
+  }
+  input:focus, textarea:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+  .compose { display: flex; gap: 8px; align-items: flex-end; }
+  textarea { resize: vertical; min-height: 44px; max-height: 200px; }
+  button {
+    font: inherit; font-weight: 600;
+    background: var(--accent); color: var(--accent-text);
+    border: 0; border-radius: 8px;
+    padding: 10px 18px; cursor: pointer; flex: none;
+  }
+  button:disabled { opacity: .5; cursor: not-allowed; }
+  .hint { font-size: 12px; color: var(--muted); margin-top: 6px; }
+  .hint code { font-family: var(--mono); }
+
+  @media (max-width: 560px) {
+    .fields { grid-template-columns: 1fr; }
+    .compose { flex-direction: column; align-items: stretch; }
+    .user-msg { max-width: 92%; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <div class="inner">
+    <h1>Agente AJ</h1>
+    <p>Descreva a tarefa do card. A pipeline classifica e prepara o branch; a implementação é feita depois, no Claude Code.</p>
+  </div>
+</header>
+
+<main id="transcript">
+  <div class="inner" id="runs">
+    <p class="empty" id="empty">Nenhuma execução ainda.</p>
+  </div>
+</main>
+
+<form id="form" autocomplete="off">
+  <div class="inner">
+    <div class="fields">
+      <div>
+        <label for="repo">Repositório</label>
+        <input id="repo" placeholder="/caminho/do/repositorio">
+      </div>
+      <div>
+        <label for="card">Card</label>
+        <input id="card" placeholder="1425" inputmode="numeric">
+      </div>
+    </div>
+    <div class="compose">
+      <textarea id="message" rows="2" placeholder="Ex.: Adicionar endpoint de health check"></textarea>
+      <button id="send" type="submit">Executar</button>
+    </div>
+    <div class="hint">Enter executa, Shift+Enter quebra linha. Também dá para escrever <code>repo: … card: …</code> na própria mensagem.</div>
+  </div>
+</form>
+
+<template id="run-tpl">
+  <div class="user-msg"><small></small><span class="text"></span></div>
+  <section class="run">
+    <ol class="steps"></ol>
+    <div class="error" hidden></div>
+    <div class="result" hidden>
+      <dl class="facts">
+        <dt>Classificação</dt><dd><span class="badge" data-f="classification"></span></dd>
+        <dt>Branch</dt><dd><code data-f="branch"></code></dd>
+      </dl>
+      <p class="note">Próximo passo: abra o Claude Code no repositório e implemente o card nesse branch.</p>
+      <h3>Métricas</h3>
+      <div class="metrics">
+        <div class="metric"><div class="label">Tempo total</div><div class="value" data-f="elapsed"></div></div>
+        <div class="metric"><div class="label">Tokens de entrada</div><div class="value" data-f="in"></div></div>
+        <div class="metric"><div class="label">Tokens de saída</div><div class="value" data-f="out"></div></div>
+        <div class="metric"><div class="label">Tokens totais</div><div class="value" data-f="total"></div></div>
+      </div>
+    </div>
+  </section>
+</template>
+
+<script>
+const $ = (sel, root = document) => root.querySelector(sel);
+const fmt = new Intl.NumberFormat("pt-BR");
+const POLL_MS = 1000;
+
+const form = $("#form"), repoEl = $("#repo"), cardEl = $("#card"), msgEl = $("#message"), sendBtn = $("#send");
+let steps = [];
+let busy = false;
+
+function store(key, value) { try { localStorage.setItem(key, value); } catch {} }
+function recall(key) { try { return localStorage.getItem(key) || ""; } catch { return ""; } }
+repoEl.value = recall("aj.repo");
+
+async function loadSteps() {
+  try {
+    steps = await (await fetch("/api/steps")).json();
+  } catch {
+    steps = [1, 2, 3, 4].map(n => ({ number: n, name: `Passo ${n}` }));
+  }
+}
+
+function setBusy(value) {
+  busy = value;
+  sendBtn.disabled = value;
+  sendBtn.textContent = value ? "Executando…" : "Executar";
+}
+
+function addRun(message, repo, card) {
+  $("#empty")?.remove();
+  const frag = $("#run-tpl").content.cloneNode(true);
+  const header = [card && `Card ${card}`, repo].filter(Boolean).join(" · ");
+  $(".user-msg small", frag).textContent = header;
+  $(".user-msg .text", frag).textContent = message;
+
+  const list = $(".steps", frag);
+  for (const s of steps) {
+    const li = document.createElement("li");
+    li.dataset.step = s.number;
+    li.innerHTML = `<span class="dot"></span><span class="name"></span>`;
+    $(".name", li).textContent = `${s.number}. ${s.name[0].toUpperCase()}${s.name.slice(1)}`;
+    list.append(li);
+  }
+  const section = $(".run", frag);
+  $("#runs").append(frag);
+  scrollToEnd();
+  return section;
+}
+
+function scrollToEnd() {
+  const t = $("#transcript");
+  t.scrollTop = t.scrollHeight;
+}
+
+function renderSteps(section, job) {
+  for (const li of section.querySelectorAll(".steps li")) {
+    const state = job.steps[li.dataset.step] || "";
+    li.className = state;
+    $(".dot", li).textContent = state === "done" ? "✓" : state === "failed" ? "✕" : "";
+  }
+}
+
+function showError(section, text) {
+  const box = $(".error", section);
+  box.textContent = text;
+  box.hidden = false;
+}
+
+function renderResult(section, r) {
+  const box = $(".result", section);
+  const f = name => $(`[data-f="${name}"]`, box);
+  f("classification").textContent = r.classification ?? "-";
+  f("branch").textContent = r.branch ? `${r.branch.name} (${r.branch.created ? "criado" : "existente"})` : "-";
+
+  const t = r.tokens.total;
+  f("elapsed").textContent = `${r.elapsed_seconds.toLocaleString("pt-BR", { minimumFractionDigits: 2 })} s`;
+  f("in").textContent = fmt.format(t.input);
+  f("out").textContent = fmt.format(t.output);
+  f("total").textContent = fmt.format(t.total);
+
+  box.hidden = false;
+}
+
+async function poll(section, id) {
+  while (true) {
+    let job;
+    try {
+      const res = await fetch(`/api/runs/${id}`);
+      job = await res.json();
+      if (!res.ok) throw new Error(job.error || res.statusText);
+    } catch (err) {
+      showError(section, `Não foi possível consultar a execução: ${err.message}`);
+      return;
+    }
+    renderSteps(section, job);
+    if (job.status === "succeeded") { renderResult(section, job.result); scrollToEnd(); return; }
+    if (job.status === "failed") { showError(section, job.error); scrollToEnd(); return; }
+    await new Promise(r => setTimeout(r, POLL_MS));
+  }
+}
+
+async function submit() {
+  if (busy) return;
+  const message = msgEl.value.trim(), repo = repoEl.value.trim(), card = cardEl.value.trim();
+  if (!message) { msgEl.focus(); return; }
+
+  setBusy(true);
+  store("aj.repo", repo);
+  const section = addRun(message, repo, card);
+  try {
+    const res = await fetch("/api/runs", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ message, repo, card }),
+    });
+    const job = await res.json();
+    if (!res.ok) { showError(section, job.error || res.statusText); return; }
+    msgEl.value = "";
+    await poll(section, job.id);
+  } catch (err) {
+    showError(section, `Falha de comunicação com o servidor: ${err.message}`);
+  } finally {
+    setBusy(false);
+  }
+}
+
+form.addEventListener("submit", e => { e.preventDefault(); submit(); });
+msgEl.addEventListener("keydown", e => {
+  if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); submit(); }
+});
+
+loadSteps();
+</script>
+</body>
+</html>

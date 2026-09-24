@@ -1,0 +1,63 @@
+"""Ponto de entrada da pipeline do Agente AJ.
+
+Uso:
+    python main.py "repo: /caminho/do/repo card: 1425 Adicionar endpoint de health check"
+    python main.py --repo /caminho/do/repo --card 1425 "Adicionar endpoint de health check"
+"""
+
+from __future__ import annotations
+
+import argparse
+import logging
+import sys
+
+from core.exceptions import MissingInputError, PipelineError
+from core.logging_config import setup_logging
+from core.pipeline import Pipeline, format_report
+from core.settings import load_settings
+from core.validator import validate_input
+
+EXIT_OK = 0
+EXIT_INVALID_INPUT = 2
+EXIT_PIPELINE_ERROR = 1
+
+
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Pipeline do Agente AJ")
+    parser.add_argument("message", nargs="*", help="Mensagem do chat (descrição da tarefa)")
+    parser.add_argument("--repo", help="Caminho absoluto ou relativo do repositório")
+    parser.add_argument("--card", help="Número do card/tarefa")
+    return parser.parse_args(argv)
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = parse_args(argv)
+
+    # Guard clause: nada é executado sem repositório e card.
+    try:
+        data = validate_input(" ".join(args.message), repo=args.repo, card=args.card)
+    except MissingInputError as exc:
+        print(f"❌ {exc}", file=sys.stderr)
+        return EXIT_INVALID_INPUT
+
+    try:
+        settings = load_settings()
+        setup_logging(settings.logging)
+        report = Pipeline(settings).run(data)
+    except PipelineError as exc:
+        print(f"❌ {exc}", file=sys.stderr)
+        return EXIT_PIPELINE_ERROR
+    except KeyboardInterrupt:
+        print("\n⚠️  Pipeline interrompida pelo usuário.", file=sys.stderr)
+        return 130
+    except Exception as exc:  # noqa: BLE001 - última barreira: nunca devolver traceback ao chat
+        logging.getLogger(__name__).exception("Erro inesperado na pipeline")
+        print(f"❌ Erro inesperado: {exc}. Detalhes no log da pipeline.", file=sys.stderr)
+        return EXIT_PIPELINE_ERROR
+
+    print(format_report(report))
+    return EXIT_OK
+
+
+if __name__ == "__main__":
+    sys.exit(main())
