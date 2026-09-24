@@ -25,6 +25,10 @@ class ClaudeExecutionError(PipelineError):
     """Falha na execução do Claude Code."""
 
 
+class RedmineError(PipelineError):
+    """Falha ao anotar a tarefa no Redmine."""
+
+
 class PipelineCancelled(PipelineError):
     """Execução cancelada pelo usuário."""
 

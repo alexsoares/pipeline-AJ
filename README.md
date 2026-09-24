@@ -12,7 +12,8 @@ Pipeline do Agente AJ. A partir de um card (repositório + número + descrição
 
 Depois da implementação, feita pelo passo 4 ou por você no Claude Code, **conclua o card**: a pipeline confere que
 o repositório está no branch do card, lista tudo o que mudou desde a base do branch, gera o `CARD-<n>.md` e, se você
-pedir, faz o commit `<classificação>(card-<n>): <descrição>`.
+pedir, faz o commit `<classificação>(card-<n>): <descrição>` e anota o mesmo texto do documento nas notas da tarefa
+`<n>` do Redmine.
 
 A escolha é feita a cada execução. Com a implementação ligada, o repositório precisa estar sem alterações pendentes
 (faça commit ou stash antes), assim os arquivos listados no final são só os que o Claude Code alterou. O Claude Code
@@ -48,8 +49,8 @@ python main.py "repo: /caminho/do/repo card: 1425 Adicionar endpoint de health c
 # prepara o branch e já implementa com o Claude Code
 python main.py --implementar --repo /caminho/do/repo --card 1425 "Adicionar endpoint de health check"
 
-# conclui o card depois da implementação (descrição opcional; --commit faz o commit)
-python main.py --concluir --commit --repo /caminho/do/repo --card 1425 "Adicionar endpoint de health check"
+# conclui o card depois da implementação (descrição opcional; --commit faz o commit; --redmine anota a tarefa)
+python main.py --concluir --commit --redmine --repo /caminho/do/repo --card 1425 "Adicionar endpoint de health check"
 ```
 
 Sem repositório **e** número do card, a pipeline não executa nada.
@@ -71,7 +72,7 @@ python -m web.app --port 9000
 Mostra o progresso de cada passo em tempo real. A opção **Implementar com o Claude Code** decide se o passo 4
 roda; a escolha fica lembrada no navegador. Cada execução tem um botão **Cancelar**, que encerra o Claude Code na
 hora (as alterações parciais ficam no branch para você revisar ou descartar). Execuções concluídas com sucesso
-mostram **Concluir card**, com a opção de fazer o commit.
+mostram **Concluir card**, com as opções de fazer o commit e de anotar na tarefa do Redmine.
 
 Execuções em repositórios diferentes rodam em paralelo; no mesmo repositório, só uma por vez. Por padrão o servidor
 escuta só em `127.0.0.1`, pois executa Git e o Claude Code na máquina local.
@@ -86,7 +87,21 @@ escuta só em `127.0.0.1`, pois executa Git e o Claude Code na máquina local.
 | `classifier` | modelo, `max_tokens` e timeout do classificador |
 | `claude_code` | executável, modelo, modo de permissão e timeout do Claude Code (passo 4) |
 | `documentation` | nome do documento gerado na conclusão (padrão `CARD-{card}.md`) |
+| `redmine` | URL do Redmine, timeout e verificação do certificado SSL |
 | `logging` | nível e arquivo de log (padrão `logs/pipeline.log`) |
+
+### Redmine
+
+Para anotar a tarefa, defina no `.env`:
+
+```bash
+REDMINE_URL=https://redmine.exemplo.gov.br
+REDMINE_API_KEY=<sua chave>   # Redmine → Minha conta → Chave de acesso à API
+```
+
+A API REST precisa estar habilitada no Redmine (Administração → Configurações → API), e o usuário da chave precisa
+poder editar a tarefa. Se a anotação falhar, o documento e o commit já feitos são mantidos e o erro aparece no
+resultado; basta concluir de novo com a opção do Redmine.
 
 ## Testes
 

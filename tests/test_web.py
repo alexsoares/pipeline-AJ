@@ -139,3 +139,17 @@ def test_conclusao_bloqueada_durante_execucao(client_for, repo, fake_claude):
     assert res.status_code == 409
     client.post(f"/api/runs/{job['id']}/cancel")
     wait(client, job["id"])
+
+
+def test_conclusao_com_redmine_pela_web(client_for, repo, monkeypatch):
+    monkeypatch.delenv("REDMINE_URL", raising=False)
+    monkeypatch.delenv("REDMINE_API_KEY", raising=False)
+    client = client_for()
+    wait(client, post(client, repo).get_json()["id"])
+
+    res = client.post("/api/conclusions", json={"repo": str(repo), "card": "7", "redmine": True})
+    assert res.status_code == 200  # documento gerado; a falha do Redmine vem no corpo
+    data = res.get_json()
+    assert data["redmine_requested"] is True
+    assert data["redmine_url"] is None
+    assert "Redmine não configurado" in data["redmine_error"]

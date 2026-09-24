@@ -1,7 +1,7 @@
 """Conclusão do card: retorno à pipeline depois da implementação (manual ou pelo Claude Code).
 
 Confere que o repositório está no branch do card, levanta o que mudou desde a base do branch,
-gera o CARD-<n>.md e, se pedido, faz o commit padronizado.
+gera o CARD-<n>.md e, se pedido, faz o commit padronizado e anota o mesmo texto na tarefa <n> do Redmine.
 """
 
 from __future__ import annotations
@@ -13,10 +13,11 @@ from pathlib import Path
 from typing import Any
 
 from core.documentation import CardDocument, write_card_document
-from core.exceptions import GitError
+from core.exceptions import GitError, RedmineError
 from core.git_manager import GitManager
 from core.models import VALID_CLASSIFICATIONS
 from core.settings import Settings
+from integration.redmine import RedmineClient
 
 logger = logging.getLogger(__name__)
 
@@ -34,6 +35,10 @@ class ConclusionReport:
     document_path: Path | None = None
     commit: str | None = None
     commit_requested: bool = False
+    redmine_requested: bool = False
+    redmine_url: str | None = None
+    # Falha no Redmine não desfaz documento nem commit: fica registrada aqui para o usuário tentar de novo.
+    redmine_error: str | None = None
 
 
 def commit_message(classification: str, card: str, request: str) -> str:
@@ -52,6 +57,8 @@ def conclude(
     *,
     commit: bool = False,
     claude_output: str = "",
+    redmine: bool = False,
+    redmine_client: RedmineClient | None = None,
 ) -> ConclusionReport:
     git = GitManager(repo_path, settings.git.command_timeout_seconds)
     git.ensure_repository()
@@ -78,6 +85,7 @@ def conclude(
         base=base_name,
         changed_files=changed,
         commit_requested=commit,
+        redmine_requested=redmine,
     )
     report.document_path = write_card_document(
         repo_path,
@@ -97,6 +105,14 @@ def conclude(
     if commit:
         report.commit = git.commit_all(commit_message(classification, card, request))
         logger.info("Commit do card %s: %s", card, report.commit or "nada a commitar")
+
+    if redmine:
+        client = redmine_client or RedmineClient(settings.redmine)
+        try:
+            report.redmine_url = client.add_note(card, report.document_path.read_text(encoding="utf-8"))
+        except RedmineError as exc:
+            logger.error("Falha ao anotar a tarefa %s no Redmine: %s", card, exc)
+            report.redmine_error = str(exc)
     return report
 
 
@@ -106,6 +122,10 @@ def format_conclusion(report: ConclusionReport) -> str:
         commit = "não solicitado"
     else:
         commit = report.commit or "nada a commitar"
+    if not report.redmine_requested:
+        redmine = "não solicitado"
+    else:
+        redmine = f"nota adicionada em {report.redmine_url}" if report.redmine_url else f"FALHOU: {report.redmine_error}"
     return "\n".join([
         f"=============== AGENTE AJ | Conclusão do card {report.card} ===============",
         f"Repositório   : {report.repo_path}",
@@ -113,6 +133,7 @@ def format_conclusion(report: ConclusionReport) -> str:
         f"Branch        : {report.branch} (base: {report.base})",
         f"Documento     : {report.document_path}",
         f"Commit        : {commit}",
+        f"Redmine       : {redmine}",
         "",
         f"--- Alterações desde {report.base} ---",
         *files,
@@ -130,5 +151,8 @@ def conclusion_to_dict(report: ConclusionReport) -> dict[str, Any]:
         "document_path": str(report.document_path) if report.document_path else None,
         "commit_requested": report.commit_requested,
         "commit": report.commit,
+        "redmine_requested": report.redmine_requested,
+        "redmine_url": report.redmine_url,
+        "redmine_error": report.redmine_error,
         "text": format_conclusion(report),
     }

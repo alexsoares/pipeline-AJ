@@ -65,8 +65,22 @@ def test_concluir_fora_do_branch(cli, repo, capsys):
 
 @pytest.mark.parametrize(
     ("flags", "message"),
-    [(["--commit"], "só vale junto com --concluir"), (["--concluir", "--implementar"], "não os dois")],
+    [
+        (["--commit"], "--commit só vale junto com --concluir"),
+        (["--redmine"], "--redmine só vale junto com --concluir"),
+        (["--concluir", "--implementar"], "não os dois"),
+    ],
 )
 def test_combinacoes_invalidas(cli, repo, capsys, flags, message):
     assert cli([*flags, "--repo", str(repo), "--card", "12", "tarefa"]) == main.EXIT_INVALID_INPUT
     assert message in capsys.readouterr().err
+
+
+def test_concluir_com_redmine_sem_configuracao_sai_com_erro(cli, repo, capsys, monkeypatch):
+    monkeypatch.delenv("REDMINE_URL", raising=False)
+    monkeypatch.delenv("REDMINE_API_KEY", raising=False)
+    assert cli(["--repo", str(repo), "--card", "12", "tarefa"]) == main.EXIT_OK
+    assert cli(["--concluir", "--redmine", "--repo", str(repo), "--card", "12"]) == main.EXIT_PIPELINE_ERROR
+    out = capsys.readouterr().out
+    assert "FALHOU: Redmine não configurado" in out
+    assert (repo / "CARD-12.md").exists()

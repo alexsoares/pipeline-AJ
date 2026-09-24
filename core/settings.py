@@ -43,6 +43,13 @@ class DocumentationSettings:
 
 
 @dataclass(frozen=True)
+class RedmineSettings:
+    url: str | None = None  # a variável REDMINE_URL tem precedência; a chave vem só de REDMINE_API_KEY
+    timeout_seconds: int = 30
+    verify_ssl: bool = True
+
+
+@dataclass(frozen=True)
 class LoggingSettings:
     level: str = "INFO"
     file: str = "logs/pipeline.log"
@@ -54,6 +61,7 @@ class Settings:
     classifier: ClassifierSettings = field(default_factory=ClassifierSettings)
     claude_code: ClaudeCodeSettings = field(default_factory=ClaudeCodeSettings)
     documentation: DocumentationSettings = field(default_factory=DocumentationSettings)
+    redmine: RedmineSettings = field(default_factory=RedmineSettings)
     logging: LoggingSettings = field(default_factory=LoggingSettings)
 
 

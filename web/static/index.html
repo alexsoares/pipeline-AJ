@@ -274,12 +274,14 @@
         <p class="note">Depois de implementar (aqui ou no Claude Code), gere o CARD-&lt;n&gt;.md com tudo o que mudou desde a base do branch.</p>
         <div class="conclude-actions">
           <label><input type="checkbox" class="conclude-commit"> Fazer commit</label>
+          <label><input type="checkbox" class="conclude-redmine"> Anotar na tarefa do Redmine</label>
           <button type="button" class="conclude-btn">Concluir card</button>
         </div>
         <div class="conclude-result" hidden>
           <dl class="facts">
             <dt>Documento</dt><dd><code data-f="doc"></code></dd>
             <dt>Commit</dt><dd><code data-f="commit"></code></dd>
+            <dt>Redmine</dt><dd data-f="redmine"></dd>
           </dl>
           <ul class="files" data-f="conclude-files"></ul>
         </div>
@@ -415,8 +417,24 @@ function renderResult(section, r) {
   box.hidden = false;
 }
 
+function renderRedmine(cell, r) {
+  cell.replaceChildren();
+  cell.style.color = "";
+  if (!r.redmine_requested) { cell.textContent = "não solicitado"; return; }
+  if (r.redmine_url) {
+    const a = Object.assign(document.createElement("a"), { href: r.redmine_url, target: "_blank", rel: "noopener", textContent: "nota adicionada na tarefa" });
+    cell.append(a);
+    return;
+  }
+  cell.textContent = `falhou: ${r.redmine_error}`;
+  cell.style.color = "var(--err)";
+}
+
 function attachConclude(section, ctx) {
   const btn = $(".conclude-btn", section), commitEl = $(".conclude-commit", section);
+  const redmineEl = $(".conclude-redmine", section);
+  redmineEl.checked = recall("aj.redmine") === "1";
+  redmineEl.addEventListener("change", () => store("aj.redmine", redmineEl.checked ? "1" : "0"));
   const box = $(".conclude-result", section);
   const f = name => $(`[data-f="${name}"]`, box);
   btn.addEventListener("click", async () => {
@@ -427,12 +445,13 @@ function attachConclude(section, ctx) {
       const res = await fetch("/api/conclusions", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ...ctx, commit: commitEl.checked }),
+        body: JSON.stringify({ ...ctx, commit: commitEl.checked, redmine: redmineEl.checked }),
       });
       const r = await res.json();
       if (!res.ok) throw new Error(r.error || res.statusText);
       f("doc").textContent = r.document_path;
       f("commit").textContent = !r.commit_requested ? "não solicitado" : r.commit || "nada a commitar";
+      renderRedmine(f("redmine"), r);
       f("conclude-files").replaceChildren(...(r.changed_files.length ? r.changed_files : ["(nenhum arquivo alterado)"])
         .map(line => Object.assign(document.createElement("li"), { textContent: line })));
       box.hidden = false;

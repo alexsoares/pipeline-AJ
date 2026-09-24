@@ -9,7 +9,8 @@ classifica a solicitação como `feature` / `hotfix` / `release` com um LLM e pr
 A implementação (passo 4) é opcional e escolhida a cada execução (`--implementar` na CLI, checkbox na web): ou a pipeline
 roda o Claude Code em modo headless no branch, ou é pulada e o relatório orienta abrir o Claude Code manualmente.
 Nos dois casos o usuário volta depois pelo modo **concluir** (`--concluir [--commit]`, botão na web), que gera o
-`CARD-<n>.md` com as alterações desde a base do branch e, opcionalmente, faz o commit padronizado.
+`CARD-<n>.md` com as alterações desde a base do branch e, opcionalmente, faz o commit padronizado e anota o mesmo
+texto na tarefa `<n>` do Redmine (o número do card é o número da tarefa).
 Todo o código, os comentários e as mensagens para o usuário são em português.
 
 ## Comandos
@@ -24,7 +25,7 @@ python -m pytest tests/test_pipeline.py -k cancelado      # um arquivo / filtro 
 python main.py --repo /caminho/repo --card 1425 "descrição"        # CLI
 python main.py "repo: /caminho/repo card: 1425 descrição"           # repo/card embutidos na mensagem
 python main.py --implementar --repo /caminho/repo --card 1425 "…"  # também implementa via Claude Code
-python main.py --concluir --commit --repo /caminho/repo --card 1425 # fecha o card (descrição opcional)
+python main.py --concluir --commit --redmine --repo /caminho/repo --card 1425  # fecha o card (descrição opcional)
 python -m web.app [--port 9000]                                     # UI web em 127.0.0.1:8000
 ```
 
@@ -68,5 +69,9 @@ Códigos de saída da CLI: `0` ok, `2` entrada inválida, `1` falha da pipeline,
   branch protegido existente, gera o documento via `core/documentation.py` (o próprio `CARD-<n>.md` fica fora da lista) e,
   com commit, faz `git add -A` + `<classificação>(card-<n>): <1ª linha da descrição>`. Na web (`POST /api/conclusions`)
   ocupa o bloqueio do repositório e, com `job_id`, inclui o resumo do Claude Code daquela execução.
+- **Redmine** (`integration/redmine.py`): REST direto (`PUT /issues/<n>.json` com `notes`), via `httpx`; URL em
+  `REDMINE_URL` (ou `redmine.url`) e chave só em `REDMINE_API_KEY`. É o último passo da conclusão e **não levanta**:
+  a falha vai para `ConclusionReport.redmine_error` para não perder documento e commit já feitos (a CLI sai com 1, a web
+  responde 200 com o erro no corpo). Nos testes, `RedmineClient` recebe um `httpx.MockTransport`.
 - **Classificador** (`core/classifier.py`): SDK da Anthropic, modelo leve, `max_tokens` baixo; extrai o rótulo por regex
   sobre `VALID_CLASSIFICATIONS` (`core/models.py`). Os tokens consumidos entram no relatório via `TokenUsage`.

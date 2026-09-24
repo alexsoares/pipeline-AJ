@@ -1,7 +1,7 @@
 import pytest
 
 from core.conclusion import commit_message, conclude, conclusion_to_dict, format_conclusion
-from core.exceptions import GitError
+from core.exceptions import GitError, RedmineError
 from core.settings import Settings
 from tests.conftest import GIT_IDENTITY, git
 
@@ -108,3 +108,42 @@ def test_relatorios(card_repo):
     data = conclusion_to_dict(report)
     assert data["document_path"] == str(card_repo / "CARD-42.md")
     assert data["commit_requested"] is False
+
+
+class FakeRedmine:
+    def __init__(self, error=None):
+        self.error = error
+        self.notes = []
+
+    def add_note(self, issue_id, notes):
+        if self.error:
+            raise self.error
+        self.notes.append((issue_id, notes))
+        return f"https://redmine.exemplo/issues/{issue_id}"
+
+
+def test_redmine_recebe_o_mesmo_texto_do_documento(card_repo):
+    redmine = FakeRedmine()
+    report = conclude(Settings(), card_repo, "42", "Corrigir login", commit=True, redmine=True, redmine_client=redmine)
+
+    assert redmine.notes == [("42", (card_repo / "CARD-42.md").read_text())]
+    assert report.redmine_url == "https://redmine.exemplo/issues/42"
+    assert report.redmine_error is None
+    assert "nota adicionada em https://redmine.exemplo/issues/42" in format_conclusion(report)
+
+
+def test_redmine_nao_e_chamado_sem_pedir(card_repo):
+    redmine = FakeRedmine()
+    report = conclude(Settings(), card_repo, "42", redmine_client=redmine)
+    assert redmine.notes == []
+    assert "Redmine       : não solicitado" in format_conclusion(report)
+
+
+def test_falha_no_redmine_mantem_documento_e_commit(card_repo):
+    redmine = FakeRedmine(error=RedmineError("Tarefa 42 não encontrada"))
+    report = conclude(Settings(), card_repo, "42", "x", commit=True, redmine=True, redmine_client=redmine)
+
+    assert report.redmine_error == "Tarefa 42 não encontrada"
+    assert report.commit and (card_repo / "CARD-42.md").exists()
+    assert "FALHOU: Tarefa 42 não encontrada" in format_conclusion(report)
+    assert conclusion_to_dict(report)["redmine_error"] == "Tarefa 42 não encontrada"

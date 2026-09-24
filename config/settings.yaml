@@ -22,6 +22,13 @@ claude_code:
 documentation:
   filename_template: "CARD-{card}.md"
 
+redmine:
+  # Na conclusão do card, o CARD-<n>.md pode ser anotado na tarefa <n> do Redmine.
+  # URL aqui ou em REDMINE_URL (.env, tem precedência); a chave de API só em REDMINE_API_KEY.
+  url: null
+  timeout_seconds: 30
+  verify_ssl: true             # false só para servidor interno com certificado próprio
+
 logging:
   level: INFO
   file: logs/pipeline.log

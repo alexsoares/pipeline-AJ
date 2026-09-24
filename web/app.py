@@ -110,7 +110,9 @@ class JobManager:
     def get(self, job_id: str) -> Job | None:
         return self._jobs.get(job_id)
 
-    def conclude(self, data: PipelineInput, commit: bool, claude_output: str = "") -> ConclusionReport:
+    def conclude(
+        self, data: PipelineInput, commit: bool, claude_output: str = "", redmine: bool = False
+    ) -> ConclusionReport:
         """Conclui o card na hora (é rápido), ocupando o repositório para nenhuma execução trocar de branch no meio."""
         key = self._repo_key(data.repo_path)
         with self._lock:
@@ -120,7 +122,7 @@ class JobManager:
         try:
             return conclude(
                 self.settings, data.repo_path, data.card_number, data.request,
-                commit=commit, claude_output=claude_output,
+                commit=commit, claude_output=claude_output, redmine=redmine,
             )
         finally:
             with self._lock:
@@ -204,7 +206,12 @@ def create_app(settings: Settings | None = None) -> Flask:
         job = jobs.get(str(body.get("job_id") or ""))
         claude = (job.result or {}).get("claude") if job else None
         try:
-            report = jobs.conclude(data, commit=body.get("commit") is True, claude_output=(claude or {}).get("output", ""))
+            report = jobs.conclude(
+                data,
+                commit=body.get("commit") is True,
+                claude_output=(claude or {}).get("output", ""),
+                redmine=body.get("redmine") is True,
+            )
         except PipelineBusyError:
             return jsonify({"error": "Há uma execução em andamento neste repositório. Aguarde ou cancele."}), 409
         except PipelineError as exc:
