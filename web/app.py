@@ -27,9 +27,10 @@ from core.exceptions import GitError, MissingInputError, PipelineCancelled, Pipe
 from core.git_manager import GitManager
 from core.logging_config import setup_logging
 from core.models import PipelineInput
-from core.pipeline import STEPS, Pipeline, StepFailed, report_to_dict
+from core.pipeline import MISSING_REQUEST, STEPS, Pipeline, StepFailed, report_to_dict
 from core.settings import Settings, load_settings
 from core.validator import validate_input
+from integration.redmine import redmine_configured
 
 logger = logging.getLogger(__name__)
 STATIC_DIR = Path(__file__).resolve().parent / "static"
@@ -167,6 +168,10 @@ def create_app(settings: Settings | None = None) -> Flask:
     def index():
         return send_from_directory(STATIC_DIR, "index.html")
 
+    @app.get("/api/config")
+    def config():
+        return jsonify({"redmine": redmine_configured(settings.redmine)})
+
     @app.get("/api/steps")
     def steps():
         return jsonify([{"number": n, "name": name} for n, name in STEPS.items()])
@@ -179,9 +184,12 @@ def create_app(settings: Settings | None = None) -> Flask:
                 str(body.get("message", "")),
                 repo=str(body.get("repo") or "") or None,
                 card=str(body.get("card") or "") or None,
+                require_request=False,
             )
         except MissingInputError as exc:
             return jsonify({"error": str(exc)}), 400
+        if not data.request and not redmine_configured(settings.redmine):
+            return jsonify({"error": MISSING_REQUEST}), 400
 
         try:
             job = jobs.start(data, implement=body.get("implement") is True)

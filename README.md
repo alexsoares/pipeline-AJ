@@ -1,16 +1,19 @@
 # pipeline-AJ
 
-Pipeline do Agente AJ. A partir de um card (repositório + número + descrição), ela:
+Pipeline do Agente AJ. A partir de um card (repositório + número; a descrição é opcional com o Redmine), ela:
 
 1. **Status do Git**: confirma que o caminho é um repositório e lista as alterações pendentes.
-2. **Classificação**: um LLM leve classifica a solicitação como `feature`, `hotfix` ou `release`.
-3. **Branch**: se você estiver em `main`/`master`, cria (ou reaproveita) o branch `<classificação>/card-<n>`.
-4. **Implementação (opcional)**: roda o Claude Code em modo headless no branch do card. Desligada, o passo é pulado
+2. **Tarefa no Redmine**: lê a tarefa de mesmo número do card (título, descrição e critérios de aceitação), que vira
+   a solicitação; o que você digitar entra como observação. Sem Redmine configurado, o passo é pulado.
+3. **Classificação**: `feature`, `hotfix` ou `release`. Pelo tipo da tarefa no Redmine quando ele é inequívoco
+   (ex.: Nova funcionalidade → feature, Incidente → hotfix), sem gastar tokens; nos demais casos, por um LLM leve.
+4. **Branch**: se você estiver em `main`/`master`, cria (ou reaproveita) o branch `<classificação>/card-<n>`.
+5. **Implementação (opcional)**: roda o Claude Code em modo headless no branch do card. Desligada, o passo é pulado
    e a pipeline só avisa para você abrir o Claude Code.
-5. **Resposta consolidada**: classificação, branch, tempo e tokens; com implementação, também o resumo do Claude Code,
+6. **Resposta consolidada**: classificação, branch, tempo e tokens; com implementação, também o resumo do Claude Code,
    os arquivos alterados e o custo.
 
-Depois da implementação, feita pelo passo 4 ou por você no Claude Code, **conclua o card**: a pipeline confere que
+Depois da implementação, feita pelo passo 5 ou por você no Claude Code, **conclua o card**: a pipeline confere que
 o repositório está no branch do card, lista tudo o que mudou desde a base do branch, gera o `CARD-<n>.md` e, se você
 pedir, faz o commit `<classificação>(card-<n>): <descrição>` e anota o mesmo texto do documento nas notas da tarefa
 `<n>` do Redmine.
@@ -23,8 +26,8 @@ nunca faz commit, push nem troca de branch: a revisão e o commit ficam com voc�
 
 - Python 3.10+
 - Git no `PATH`
-- Chave da API da Anthropic (usada pelo classificador)
-- [Claude Code](https://claude.com/claude-code) instalado e autenticado, apenas para usar a implementação (passo 4)
+- Chave da API da Anthropic (usada pelo classificador quando o tipo da tarefa não define a classificação)
+- [Claude Code](https://claude.com/claude-code) instalado e autenticado, apenas para usar a implementação (passo 5)
 
 ## Instalação
 
@@ -43,6 +46,9 @@ O `.env` é carregado automaticamente e não é versionado. Variáveis já expor
 ```bash
 python main.py --repo /caminho/do/repo --card 1425 "Adicionar endpoint de health check"
 
+# com o Redmine configurado, basta o número: a descrição vem da tarefa
+python main.py --repo /caminho/do/repo --card 1425
+
 # ou com repositório e card embutidos na mensagem
 python main.py "repo: /caminho/do/repo card: 1425 Adicionar endpoint de health check"
 
@@ -53,7 +59,8 @@ python main.py --implementar --repo /caminho/do/repo --card 1425 "Adicionar endp
 python main.py --concluir --commit --redmine --repo /caminho/do/repo --card 1425 "Adicionar endpoint de health check"
 ```
 
-Sem repositório **e** número do card, a pipeline não executa nada.
+Sem repositório **e** número do card, a pipeline não executa nada. Sem Redmine configurado, a descrição também é
+obrigatória.
 
 | Código de saída | Significado |
 |---|---|
@@ -69,7 +76,7 @@ python -m web.app               # http://127.0.0.1:8000
 python -m web.app --port 9000
 ```
 
-Mostra o progresso de cada passo em tempo real. A opção **Implementar com o Claude Code** decide se o passo 4
+Mostra o progresso de cada passo em tempo real. A opção **Implementar com o Claude Code** decide se o passo 5
 roda; a escolha fica lembrada no navegador. Cada execução tem um botão **Cancelar**, que encerra o Claude Code na
 hora (as alterações parciais ficam no branch para você revisar ou descartar). Execuções concluídas com sucesso
 mostram **Concluir card**, com as opções de fazer o commit e de anotar na tarefa do Redmine.
@@ -85,19 +92,23 @@ escuta só em `127.0.0.1`, pois executa Git e o Claude Code na máquina local.
 |---|---|
 | `git` | branches protegidos (onde a pipeline cria o branch do card) e timeout dos comandos |
 | `classifier` | modelo, `max_tokens` e timeout do classificador |
-| `claude_code` | executável, modelo, modo de permissão e timeout do Claude Code (passo 4) |
+| `claude_code` | executável, modelo, modo de permissão e timeout do Claude Code (passo 5) |
 | `documentation` | nome do documento gerado na conclusão (padrão `CARD-{card}.md`) |
-| `redmine` | URL do Redmine, timeout e verificação do certificado SSL |
+| `redmine` | URL, timeout, SSL, mapeamento tipo da tarefa → classificação e campos personalizados lidos |
 | `logging` | nível e arquivo de log (padrão `logs/pipeline.log`) |
 
 ### Redmine
 
-Para anotar a tarefa, defina no `.env`:
+Para ler e anotar as tarefas, defina no `.env`:
 
 ```bash
 REDMINE_URL=https://projetos.ima.sp.gov.br
 REDMINE_API_KEY=<sua chave>   # Redmine → Minha conta → Chave de acesso à API
 ```
+
+O mapeamento de tipos em `redmine.tracker_classification` vem só com tipos inequívocos. **Correção** fica de fora
+de propósito, porque é usada tanto para bug urgente quanto para ajuste simples; essas tarefas são classificadas pelo
+LLM. Acrescente ou remova tipos conforme o uso da sua equipe.
 
 A API REST precisa estar habilitada no Redmine (Administração → Configurações → API), e o usuário da chave precisa
 poder editar a tarefa. Se a anotação falhar, o documento e o commit já feitos são mantidos e o erro aparece no
@@ -119,7 +130,7 @@ mexem em repositórios reais.
 main.py              CLI
 web/                 interface web (Flask + página estática)
 core/                validação, Git, classificador, orquestração dos passos, conclusão do card
-integration/         execução do Claude Code em modo headless (passo 4)
+integration/         execução do Claude Code em modo headless (passo 5)
 config/settings.yaml configuração
 tests/               testes (pytest)
 ```

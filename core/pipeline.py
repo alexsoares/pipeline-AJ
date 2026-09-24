@@ -1,7 +1,8 @@
 """Orquestrador: executa os passos em sequência e monta o relatório final.
 
-A implementação do card (passo 4) é opcional e decidida a cada execução: ou a pipeline
-roda o Claude Code em modo headless no branch preparado, ou apenas orienta o usuário
+Com o Redmine configurado, a tarefa de mesmo número do card é lida no passo 2 e vira a solicitação
+(o texto digitado pelo usuário entra como observação). A implementação do card (passo 5) é opcional
+e decidida a cada execução: ou a pipeline roda o Claude Code em modo headless no branch preparado, ou apenas orienta o usuário
 a abri-lo depois.
 """
 
@@ -14,23 +15,41 @@ from collections.abc import Callable
 from typing import Any, TypeVar
 
 from core.classifier import RequestClassifier
-from core.exceptions import GitError, PipelineCancelled, PipelineError
+from core.exceptions import ClassificationError, GitError, MissingInputError, PipelineCancelled, PipelineError
 from core.git_manager import GitManager
-from core.models import GitStatus, PipelineInput, PipelineReport, TokenUsage
+from core.models import (
+    VALID_CLASSIFICATIONS,
+    ClassificationResult,
+    GitStatus,
+    PipelineInput,
+    PipelineReport,
+    RedmineIssue,
+    TokenUsage,
+    compose_request,
+)
 from core.settings import Settings
 from integration.claude_runner import ClaudeCodeRunner
+from integration.redmine import RedmineClient, redmine_configured
 
 logger = logging.getLogger(__name__)
 T = TypeVar("T")
 
 STEPS: dict[int, str] = {
     1: "status do Git",
-    2: "classificação da solicitação",
-    3: "preparação do branch",
-    4: "implementação no Claude Code",
-    5: "resposta consolidada",
+    2: "leitura da tarefa no Redmine",
+    3: "classificação da solicitação",
+    4: "preparação do branch",
+    5: "implementação no Claude Code",
+    6: "resposta consolidada",
 }
-IMPLEMENT_STEP = 4
+REDMINE_STEP = 2
+IMPLEMENT_STEP = 5
+FINAL_STEP = 6
+
+MISSING_REQUEST = (
+    "Informe a descrição da tarefa ou configure o Redmine (REDMINE_URL e REDMINE_API_KEY no .env) "
+    "para a pipeline lê-la pelo número do card."
+)
 
 # Recebe (número do passo, estado): "running", "done", "failed", "skipped" ou "cancelled".
 StepCallback = Callable[[int, str], None]
@@ -52,10 +71,12 @@ class Pipeline:
         classifier: RequestClassifier | None = None,
         runner: ClaudeCodeRunner | None = None,
         on_step: StepCallback | None = None,
+        redmine: RedmineClient | None = None,
     ) -> None:
         self.settings = settings
         self.classifier = classifier or RequestClassifier(settings.classifier)
         self.runner = runner or ClaudeCodeRunner(settings.claude_code)
+        self.redmine = redmine or RedmineClient(settings.redmine)
         self.on_step = on_step
         self._cancelled = threading.Event()
 
@@ -94,7 +115,23 @@ class Pipeline:
         self._notify(number, "done")
         return result
 
+    def _classify(self, issue: RedmineIssue | None, request: str) -> ClassificationResult:
+        mapped = self.settings.redmine.tracker_classification.get(issue.tracker) if issue else None
+        if mapped is None:
+            return self.classifier.classify(request)
+        if mapped not in VALID_CLASSIFICATIONS:
+            raise ClassificationError(
+                f"redmine.tracker_classification mapeia '{issue.tracker}' para '{mapped}', "
+                f"que não é {', '.join(VALID_CLASSIFICATIONS)}."
+            )
+        logger.info("Classificação '%s' pelo tipo '%s' da tarefa no Redmine (sem LLM)", mapped, issue.tracker)
+        return ClassificationResult(classification=mapped, usage=TokenUsage(), source="redmine")  # type: ignore[arg-type]
+
     def run(self, data: PipelineInput, implement: bool = False) -> PipelineReport:
+        use_redmine = redmine_configured(self.settings.redmine)
+        if not data.request and not use_redmine:
+            raise MissingInputError(MISSING_REQUEST)
+
         started = time.perf_counter()
         report = PipelineReport(input=data, implement=implement)
         git = GitManager(data.repo_path, self.settings.git.command_timeout_seconds)
@@ -102,7 +139,7 @@ class Pipeline:
         def check_status() -> GitStatus:
             status = git.status()
             if status.dirty_files and implement:
-                # Com o tree limpo, tudo o que o git status mostrar depois do passo 4 é do Claude Code.
+                # Com o tree limpo, tudo o que o git status mostrar depois do passo 5 é do Claude Code.
                 listed = "\n".join(f"  {line}" for line in status.dirty_files[:10])
                 more = f"\n  … e mais {len(status.dirty_files) - 10}" if len(status.dirty_files) > 10 else ""
                 raise GitError(
@@ -116,30 +153,36 @@ class Pipeline:
         try:
             report.initial_status = self._step(1, check_status)
 
-            report.classification = self._step(2, lambda: self.classifier.classify(data.request))
+            if use_redmine:
+                report.issue = self._step(REDMINE_STEP, lambda: self.redmine.get_issue(data.card_number))
+            else:
+                self._notify(REDMINE_STEP, "skipped")
+            report.request = request = compose_request(report.issue, data.request)
+
+            report.classification = self._step(3, lambda: self._classify(report.issue, request))
 
             branch_name = f"{report.classification.classification}/card-{data.card_number}"
             report.branch = self._step(
-                3, lambda: git.ensure_work_branch(branch_name, self.settings.git.protected_branches)
+                4, lambda: git.ensure_work_branch(branch_name, self.settings.git.protected_branches)
             )
 
             if implement:
                 classification = report.classification.classification
                 report.claude = self._step(
                     IMPLEMENT_STEP,
-                    lambda: self.runner.run(data.repo_path, data.card_number, classification, data.request),
+                    lambda: self.runner.run(data.repo_path, data.card_number, classification, request),
                 )
                 report.changed_files = git.changed_files()
             else:
                 self._notify(IMPLEMENT_STEP, "skipped")
-            self._step(5, lambda: None)
+            self._step(FINAL_STEP, lambda: None)
         finally:
             report.elapsed_seconds = time.perf_counter() - started
         return report
 
 
 def format_report(report: PipelineReport) -> str:
-    """Passo 5: resposta consolidada para o chat."""
+    """Passo 6: resposta consolidada para o chat."""
     usage = report.total_usage
     branch = report.branch
     branch_info = f"{branch.name} ({'criado' if branch.created else 'existente'})" if branch else "-"
@@ -147,7 +190,16 @@ def format_report(report: PipelineReport) -> str:
     lines = [
         f"==================== AGENTE AJ | Card {report.input.card_number} ====================",
         f"Repositório   : {report.input.repo_path}",
-        f"Classificação : {report.classification.classification if report.classification else '-'}",
+    ]
+    if report.issue:
+        issue = report.issue
+        lines += [
+            f"Tarefa        : #{issue.id} {issue.subject}",
+            f"                {issue.tracker} | {issue.status} | {issue.project}",
+            f"                {issue.url}",
+        ]
+    lines += [
+        f"Classificação : {_classification_label(report)}",
         f"Branch        : {branch_info}",
         "",
     ]
@@ -181,6 +233,15 @@ def format_report(report: PipelineReport) -> str:
     return "\n".join(lines)
 
 
+def _classification_label(report: PipelineReport) -> str:
+    result = report.classification
+    if not result:
+        return "-"
+    if result.source == "redmine" and report.issue:
+        return f"{result.classification} (pelo tipo '{report.issue.tracker}' no Redmine)"
+    return f"{result.classification} (LLM)"
+
+
 def _usage_to_dict(usage: TokenUsage | None) -> dict[str, int] | None:
     if usage is None:
         return None
@@ -195,13 +256,19 @@ def _usage_to_dict(usage: TokenUsage | None) -> dict[str, int] | None:
 
 
 def report_to_dict(report: PipelineReport) -> dict[str, Any]:
-    """Passo 5 em formato estruturado (JSON) para a interface web."""
+    """Passo 6 em formato estruturado (JSON) para a interface web."""
     claude = report.claude
+    issue = report.issue
     return {
         "card": report.input.card_number,
         "repo": str(report.input.repo_path),
-        "request": report.input.request,
+        "request": report.request or report.input.request,
+        "issue": {
+            "id": issue.id, "subject": issue.subject, "tracker": issue.tracker,
+            "status": issue.status, "project": issue.project, "url": issue.url,
+        } if issue else None,
         "classification": report.classification.classification if report.classification else None,
+        "classification_source": report.classification.source if report.classification else None,
         "branch": {"name": report.branch.name, "created": report.branch.created} if report.branch else None,
         "implement": report.implement,
         "claude": {

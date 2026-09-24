@@ -23,11 +23,23 @@ documentation:
   filename_template: "CARD-{card}.md"
 
 redmine:
-  # Na conclusão do card, o CARD-<n>.md pode ser anotado na tarefa <n> do Redmine.
+  # O número do card é o número da tarefa. Com o Redmine configurado, a pipeline lê a tarefa (título, descrição
+  # e campos abaixo) no passo 2, e a conclusão pode anotar o CARD-<n>.md nela.
   # URL aqui ou em REDMINE_URL (.env, tem precedência); a chave de API só em REDMINE_API_KEY.
   url: null
   timeout_seconds: 30
   verify_ssl: true             # false só para servidor interno com certificado próprio
+  # Tipo da tarefa -> classificação, sem gastar tokens. Tipos fora do mapa vão para o LLM.
+  # "Correção" fica de fora de propósito: é usado tanto para bug urgente quanto para ajuste simples.
+  tracker_classification:
+    Nova funcionalidade: feature
+    Evolução: feature
+    Story: feature
+    Incidente: hotfix
+    Violação de segurança: hotfix
+    GMUD-Software: release
+  custom_fields:
+    - critérios de aceitação
 
 logging:
   level: INFO

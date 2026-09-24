@@ -251,7 +251,8 @@
     <div class="notice" hidden></div>
     <div class="result" hidden>
       <dl class="facts">
-        <dt>Classificação</dt><dd><span class="badge" data-f="classification"></span></dd>
+        <dt data-f="issue-label" hidden>Tarefa</dt><dd data-f="issue" hidden></dd>
+        <dt>Classificação</dt><dd><span class="badge" data-f="classification"></span> <span class="note" data-f="classification-source"></span></dd>
         <dt>Branch</dt><dd><code data-f="branch"></code></dd>
       </dl>
       <p class="note" data-f="next"></p>
@@ -298,6 +299,7 @@ const POLL_MS = 1000;
 const form = $("#form"), repoEl = $("#repo"), cardEl = $("#card"), msgEl = $("#message"), sendBtn = $("#send");
 const implementEl = $("#implement"), implementHint = $("#implement-hint");
 let steps = [];
+let redmineOn = false;
 let busy = false;
 
 function store(key, value) { try { localStorage.setItem(key, value); } catch {} }
@@ -317,8 +319,17 @@ async function loadSteps() {
   try {
     steps = await (await fetch("/api/steps")).json();
   } catch {
-    steps = [1, 2, 3, 4, 5].map(n => ({ number: n, name: `Passo ${n}` }));
+    steps = [1, 2, 3, 4, 5, 6].map(n => ({ number: n, name: `Passo ${n}` }));
   }
+}
+
+async function loadConfig() {
+  try {
+    redmineOn = (await (await fetch("/api/config")).json()).redmine === true;
+  } catch {
+    redmineOn = false;
+  }
+  if (redmineOn) msgEl.placeholder = "Opcional: a descrição vem da tarefa no Redmine (o que digitar aqui entra como observação)";
 }
 
 function setBusy(value) {
@@ -332,7 +343,7 @@ function addRun(message, repo, card, implement) {
   const frag = $("#run-tpl").content.cloneNode(true);
   const header = [card && `Card ${card}`, repo, implement && "com Claude Code"].filter(Boolean).join(" · ");
   $(".user-msg small", frag).textContent = header;
-  $(".user-msg .text", frag).textContent = message;
+  $(".user-msg .text", frag).textContent = message || "(descrição da tarefa no Redmine)";
 
   const list = $(".steps", frag);
   for (const s of steps) {
@@ -391,6 +402,19 @@ function renderResult(section, r) {
   const box = $(".result", section);
   const f = name => $(`[data-f="${name}"]`, box);
   f("classification").textContent = r.classification ?? "-";
+  f("classification-source").textContent = r.classification_source === "redmine" && r.issue
+    ? `pelo tipo “${r.issue.tracker}” no Redmine`
+    : r.classification_source === "llm" ? "pelo LLM" : "";
+  if (r.issue) {
+    const link = Object.assign(document.createElement("a"), {
+      href: r.issue.url, target: "_blank", rel: "noopener", textContent: `#${r.issue.id} ${r.issue.subject}`,
+    });
+    const meta = Object.assign(document.createElement("div"), {
+      className: "note", textContent: [r.issue.tracker, r.issue.status, r.issue.project].filter(Boolean).join(" · "),
+    });
+    f("issue").replaceChildren(link, meta);
+    f("issue").hidden = f("issue-label").hidden = false;
+  }
   f("branch").textContent = r.branch ? `${r.branch.name} (${r.branch.created ? "criado" : "existente"})` : "-";
   f("next").textContent = r.claude
     ? "Próximo passo: revise as alterações no branch e faça o commit."
@@ -493,7 +517,7 @@ async function submit() {
   if (busy) return;
   const message = msgEl.value.trim(), repo = repoEl.value.trim(), card = cardEl.value.trim();
   const implement = implementEl.checked;
-  if (!message) { msgEl.focus(); return; }
+  if (!message && !redmineOn) { msgEl.focus(); return; }
 
   setBusy(true);
   store("aj.repo", repo);
@@ -526,6 +550,7 @@ msgEl.addEventListener("keydown", e => {
 });
 
 loadSteps();
+loadConfig();
 </script>
 </body>
 </html>

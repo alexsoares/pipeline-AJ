@@ -3,7 +3,7 @@ import pytest
 import main
 from core import pipeline as pipeline_module
 from core.exceptions import ClassificationError
-from tests.conftest import FakeClassifier
+from tests.conftest import FakeClassifier, FakeRedmine
 
 
 @pytest.fixture
@@ -39,7 +39,7 @@ def test_entrada_invalida(cli, capsys):
 def test_falha_da_pipeline(cli, repo, capsys):
     code = cli(["--repo", str(repo), "--card", "12", "tarefa"], classifier=FakeClassifier(error=ClassificationError("x")))
     assert code == main.EXIT_PIPELINE_ERROR
-    assert "Falha no passo 2" in capsys.readouterr().err
+    assert "Falha no passo 3" in capsys.readouterr().err
 
 
 def test_erro_inesperado_nao_mostra_traceback(cli, repo, capsys):
@@ -84,3 +84,16 @@ def test_concluir_com_redmine_sem_configuracao_sai_com_erro(cli, repo, capsys, m
     out = capsys.readouterr().out
     assert "FALHOU: Redmine não configurado" in out
     assert (repo / "CARD-12.md").exists()
+
+
+def test_sem_descricao_e_sem_redmine(cli, repo, capsys):
+    assert cli(["--repo", str(repo), "--card", "12"]) == main.EXIT_INVALID_INPUT
+    assert "configure o Redmine" in capsys.readouterr().err
+
+
+def test_sem_descricao_com_redmine(cli, repo, capsys, redmine_env, monkeypatch):
+    monkeypatch.setattr(pipeline_module, "RedmineClient", lambda settings: FakeRedmine())
+    assert cli(["--repo", str(repo), "--card", "1425"]) == main.EXIT_OK
+    out = capsys.readouterr().out
+    assert "#1425 Adicionar health check" in out
+    assert "pelo tipo 'Evolução' no Redmine" in out

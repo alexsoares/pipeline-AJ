@@ -3,7 +3,7 @@ import time
 import pytest
 
 from core import pipeline as pipeline_module
-from tests.conftest import FakeClassifier
+from tests.conftest import FakeClassifier, FakeRedmine
 from web.app import create_app
 
 
@@ -33,7 +33,7 @@ def wait(client, job_id, timeout=15):
 
 def test_lista_os_passos(client_for):
     steps = client_for().get("/api/steps").get_json()
-    assert [s["number"] for s in steps] == [1, 2, 3, 4, 5]
+    assert [s["number"] for s in steps] == [1, 2, 3, 4, 5, 6]
 
 
 def test_pagina_inicial(client_for):
@@ -54,7 +54,7 @@ def test_execucao_sem_implementacao(client_for, repo):
 
     job = wait(client, res.get_json()["id"])
     assert job["status"] == "succeeded"
-    assert job["steps"] == {"1": "done", "2": "done", "3": "done", "4": "skipped", "5": "done"}
+    assert job["steps"] == {"1": "done", "2": "skipped", "3": "done", "4": "done", "5": "skipped", "6": "done"}
     assert job["result"]["branch"]["name"] == "feature/card-7"
 
 
@@ -62,7 +62,7 @@ def test_implement_so_liga_com_true(client_for, repo, fake_claude):
     client = client_for(fake_claude())
     job = wait(client, post(client, repo, implement="sim").get_json()["id"])
     assert job["implement"] is False
-    assert job["steps"]["4"] == "skipped"
+    assert job["steps"]["5"] == "skipped"
 
 
 def test_execucao_com_implementacao(client_for, repo, fake_claude):
@@ -153,3 +153,28 @@ def test_conclusao_com_redmine_pela_web(client_for, repo, monkeypatch):
     assert data["redmine_requested"] is True
     assert data["redmine_url"] is None
     assert "Redmine não configurado" in data["redmine_error"]
+
+
+def test_config_informa_se_o_redmine_esta_configurado(client_for, redmine_env, monkeypatch):
+    assert client_for().get("/api/config").get_json() == {"redmine": True}
+    monkeypatch.delenv("REDMINE_API_KEY")
+    assert client_for().get("/api/config").get_json() == {"redmine": False}
+
+
+def test_sem_descricao_e_sem_redmine(client_for, repo):
+    res = client_for().post("/api/runs", json={"repo": str(repo), "card": "7"})
+    assert res.status_code == 400
+    assert "configure o Redmine" in res.get_json()["error"]
+
+
+def test_sem_descricao_com_redmine(client_for, repo, redmine_env, monkeypatch):
+    monkeypatch.setattr(pipeline_module, "RedmineClient", lambda settings: FakeRedmine())
+    client = client_for()
+    res = client.post("/api/runs", json={"repo": str(repo), "card": "1425"})
+    assert res.status_code == 202
+
+    job = wait(client, res.get_json()["id"])
+    assert job["status"] == "succeeded"
+    assert job["steps"]["2"] == "done"
+    assert job["result"]["issue"]["subject"] == "Adicionar health check"
+    assert job["result"]["classification_source"] == "redmine"

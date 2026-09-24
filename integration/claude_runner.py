@@ -1,4 +1,4 @@
-"""Passo 4 (opcional): executa as alterações do card via Claude Code em modo headless (`claude -p`)."""
+"""Passo 5 (opcional): executa as alterações do card via Claude Code em modo headless (`claude -p`)."""
 
 from __future__ import annotations
 

@@ -15,9 +15,9 @@ from typing import Any
 from core.documentation import CardDocument, write_card_document
 from core.exceptions import GitError, RedmineError
 from core.git_manager import GitManager
-from core.models import VALID_CLASSIFICATIONS
+from core.models import VALID_CLASSIFICATIONS, RedmineIssue, compose_request
 from core.settings import Settings
-from integration.redmine import RedmineClient
+from integration.redmine import RedmineClient, redmine_configured
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +39,15 @@ class ConclusionReport:
     redmine_url: str | None = None
     # Falha no Redmine não desfaz documento nem commit: fica registrada aqui para o usuário tentar de novo.
     redmine_error: str | None = None
+
+
+def _fetch_issue(client: RedmineClient, card: str) -> RedmineIssue | None:
+    try:
+        return client.get_issue(card)
+    except RedmineError as exc:
+        # Sem a tarefa, a conclusão segue com o texto informado pelo usuário.
+        logger.warning("Não foi possível ler a tarefa %s no Redmine: %s", card, exc)
+        return None
 
 
 def commit_message(classification: str, card: str, request: str) -> str:
@@ -72,6 +81,9 @@ def conclude(
         )
     classification = match.group(1)
 
+    client = redmine_client or RedmineClient(settings.redmine)
+    issue = _fetch_issue(client, card) if redmine_configured(settings.redmine) else None
+
     base_name, base_commit = git.base_commit(settings.git.protected_branches)
     doc_name = settings.documentation.filename_template.format(card=card)
     # O próprio documento do card não entra na lista de alterações dele.
@@ -95,7 +107,7 @@ def conclude(
             classification=classification,
             branch=branch,
             base=base_name,
-            request=request,
+            request=compose_request(issue, request),
             changed_files=changed,
             diff_stat=git.diff_stat(base_commit),
             claude_output=claude_output,
@@ -103,11 +115,11 @@ def conclude(
     )
 
     if commit:
-        report.commit = git.commit_all(commit_message(classification, card, request))
+        # O título da tarefa é o melhor assunto de commit; sem ele, a 1ª linha do que o usuário digitou.
+        report.commit = git.commit_all(commit_message(classification, card, issue.subject if issue else request))
         logger.info("Commit do card %s: %s", card, report.commit or "nada a commitar")
 
     if redmine:
-        client = redmine_client or RedmineClient(settings.redmine)
         try:
             report.redmine_url = client.add_note(card, report.document_path.read_text(encoding="utf-8"))
         except RedmineError as exc:

@@ -59,6 +59,37 @@ class BranchResult:
 class ClassificationResult:
     classification: Classification
     usage: TokenUsage
+    source: Literal["llm", "redmine"] = "llm"  # "redmine": veio do tipo da tarefa, sem chamar o LLM
+
+
+@dataclass(frozen=True)
+class RedmineIssue:
+    id: str
+    subject: str
+    description: str
+    tracker: str
+    status: str
+    project: str
+    url: str
+    # Só os campos personalizados listados em `redmine.custom_fields`, na ordem da configuração.
+    custom_fields: dict[str, str] = field(default_factory=dict)
+
+    def as_request(self) -> str:
+        """Texto da tarefa usado como solicitação pelo classificador e pelo Claude Code."""
+        parts = [f"Tarefa #{self.id} ({self.tracker}): {self.subject}"]
+        if self.description.strip():
+            parts.append(self.description.strip())
+        parts += [f"{name[:1].upper()}{name[1:]}: {value}" for name, value in self.custom_fields.items()]
+        return "\n\n".join(parts)
+
+
+def compose_request(issue: RedmineIssue | None, user_text: str) -> str:
+    """Solicitação efetiva: o texto da tarefa do Redmine, com o que o usuário digitou como observação."""
+    if not issue:
+        return user_text.strip()
+    if not user_text.strip():
+        return issue.as_request()
+    return f"{issue.as_request()}\n\nObservações do usuário:\n{user_text.strip()}"
 
 
 @dataclass(frozen=True)
@@ -73,6 +104,8 @@ class ClaudeRunResult:
 class PipelineReport:
     input: PipelineInput
     implement: bool = False
+    request: str = ""  # solicitação efetiva (tarefa do Redmine + texto do usuário)
+    issue: RedmineIssue | None = None
     initial_status: GitStatus | None = None
     classification: ClassificationResult | None = None
     branch: BranchResult | None = None

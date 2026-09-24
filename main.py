@@ -3,6 +3,7 @@
 Uso:
     python main.py "repo: /caminho/do/repo card: 1425 Adicionar endpoint de health check"
     python main.py --repo /caminho/do/repo --card 1425 "Adicionar endpoint de health check"
+    python main.py --repo /caminho/do/repo --card 1425        # com o Redmine configurado, a descrição vem da tarefa
     python main.py --implementar --repo /caminho/do/repo --card 1425 "..."   # já implementa via Claude Code
     python main.py --concluir [--commit] [--redmine] --repo /caminho/do/repo --card 1425 ["..."]  # fecha o card
 """
@@ -16,9 +17,10 @@ import sys
 from core.conclusion import conclude, format_conclusion
 from core.exceptions import MissingInputError, PipelineError
 from core.logging_config import setup_logging
-from core.pipeline import Pipeline, format_report
+from core.pipeline import MISSING_REQUEST, Pipeline, format_report
 from core.settings import load_settings
 from core.validator import validate_input
+from integration.redmine import redmine_configured
 
 EXIT_OK = 0
 EXIT_INVALID_INPUT = 2
@@ -57,17 +59,18 @@ def main(argv: list[str] | None = None) -> int:
         print("❌ Use --implementar ou --concluir, não os dois.", file=sys.stderr)
         return EXIT_INVALID_INPUT
 
-    # Guard clause: nada é executado sem repositório e card.
+    # Guard clause: nada é executado sem repositório e card. A descrição pode vir da tarefa no Redmine.
     try:
-        data = validate_input(
-            " ".join(args.message), repo=args.repo, card=args.card, require_request=not args.concluir
-        )
+        data = validate_input(" ".join(args.message), repo=args.repo, card=args.card, require_request=False)
     except MissingInputError as exc:
         print(f"❌ {exc}", file=sys.stderr)
         return EXIT_INVALID_INPUT
 
     try:
         settings = load_settings()
+        if not args.concluir and not data.request and not redmine_configured(settings.redmine):
+            print(f"❌ {MISSING_REQUEST}", file=sys.stderr)
+            return EXIT_INVALID_INPUT
         setup_logging(settings.logging)
         if args.concluir:
             conclusion = conclude(

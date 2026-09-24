@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pytest
 
-from core.models import ClassificationResult, TokenUsage
+from core.models import ClassificationResult, RedmineIssue, TokenUsage
 from core.settings import ClaudeCodeSettings, Settings
 
 GIT_IDENTITY = ["-c", "user.name=Teste", "-c", "user.email=teste@example.com"]
@@ -22,6 +22,13 @@ def git(repo: Path, *args: str) -> str:
     return subprocess.run(
         ["git", *GIT_IDENTITY, *args], cwd=repo, check=True, capture_output=True, text=True
     ).stdout.strip()
+
+
+@pytest.fixture(autouse=True)
+def sem_redmine_do_ambiente(monkeypatch):
+    """Nenhum teste fala com o Redmine real: quem precisa configura as variáveis e injeta o transporte."""
+    monkeypatch.delenv("REDMINE_URL", raising=False)
+    monkeypatch.delenv("REDMINE_API_KEY", raising=False)
 
 
 @pytest.fixture
@@ -120,3 +127,47 @@ def settings_for():
         return replace(Settings(), claude_code=ClaudeCodeSettings(binary=str(binary), **claude_overrides))
 
     return _make
+
+
+def make_issue(tracker: str = "Evolução", **overrides) -> RedmineIssue:
+    data = {
+        "id": "1425",
+        "subject": "Adicionar health check",
+        "description": "Criar o endpoint /health.",
+        "tracker": tracker,
+        "status": "Analisar",
+        "project": "DCCA - SIM",
+        "url": "https://redmine.exemplo/issues/1425",
+        "custom_fields": {"critérios de aceitação": "Responder 200."},
+    }
+    return RedmineIssue(**{**data, **overrides})
+
+
+class FakeRedmine:
+    """Substitui o RedmineClient: devolve `issue` (ou levanta `error`) e guarda as notas enviadas."""
+
+    def __init__(self, issue: RedmineIssue | None = None, error: Exception | None = None, note_error=None):
+        self.issue = issue or make_issue()
+        self.error = error
+        self.note_error = note_error
+        self.fetched: list[str] = []
+        self.notes: list[tuple[str, str]] = []
+
+    def get_issue(self, issue_id: str) -> RedmineIssue:
+        self.fetched.append(issue_id)
+        if self.error:
+            raise self.error
+        return self.issue
+
+    def add_note(self, issue_id: str, notes: str) -> str:
+        if self.note_error:
+            raise self.note_error
+        self.notes.append((issue_id, notes))
+        return f"https://redmine.exemplo/issues/{issue_id}"
+
+
+@pytest.fixture
+def redmine_env(monkeypatch):
+    """Redmine "configurado" (as chamadas reais continuam proibidas: os testes injetam um substituto)."""
+    monkeypatch.setenv("REDMINE_URL", "https://redmine.exemplo/")
+    monkeypatch.setenv("REDMINE_API_KEY", "chave-teste")

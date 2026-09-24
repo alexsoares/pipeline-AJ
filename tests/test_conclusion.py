@@ -3,7 +3,7 @@ import pytest
 from core.conclusion import commit_message, conclude, conclusion_to_dict, format_conclusion
 from core.exceptions import GitError, RedmineError
 from core.settings import Settings
-from tests.conftest import GIT_IDENTITY, git
+from tests.conftest import FakeRedmine, git, make_issue
 
 
 @pytest.fixture
@@ -110,18 +110,6 @@ def test_relatorios(card_repo):
     assert data["commit_requested"] is False
 
 
-class FakeRedmine:
-    def __init__(self, error=None):
-        self.error = error
-        self.notes = []
-
-    def add_note(self, issue_id, notes):
-        if self.error:
-            raise self.error
-        self.notes.append((issue_id, notes))
-        return f"https://redmine.exemplo/issues/{issue_id}"
-
-
 def test_redmine_recebe_o_mesmo_texto_do_documento(card_repo):
     redmine = FakeRedmine()
     report = conclude(Settings(), card_repo, "42", "Corrigir login", commit=True, redmine=True, redmine_client=redmine)
@@ -140,10 +128,27 @@ def test_redmine_nao_e_chamado_sem_pedir(card_repo):
 
 
 def test_falha_no_redmine_mantem_documento_e_commit(card_repo):
-    redmine = FakeRedmine(error=RedmineError("Tarefa 42 não encontrada"))
+    redmine = FakeRedmine(note_error=RedmineError("Tarefa 42 não encontrada"))
     report = conclude(Settings(), card_repo, "42", "x", commit=True, redmine=True, redmine_client=redmine)
 
     assert report.redmine_error == "Tarefa 42 não encontrada"
     assert report.commit and (card_repo / "CARD-42.md").exists()
     assert "FALHOU: Tarefa 42 não encontrada" in format_conclusion(report)
     assert conclusion_to_dict(report)["redmine_error"] == "Tarefa 42 não encontrada"
+
+
+def test_com_redmine_configurado_usa_a_tarefa(card_repo, redmine_env):
+    redmine = FakeRedmine(make_issue("Correção", id="42", subject="Login falha com senha longa"))
+    conclude(Settings(), card_repo, "42", "", commit=True, redmine_client=redmine)
+
+    assert redmine.fetched == ["42"]
+    assert git(card_repo, "log", "-1", "--format=%s") == "hotfix(card-42): Login falha com senha longa"
+    doc = (card_repo / "CARD-42.md").read_text()
+    assert "Tarefa #42 (Correção): Login falha com senha longa" in doc
+
+
+def test_falha_ao_ler_a_tarefa_nao_impede_a_conclusao(card_repo, redmine_env):
+    redmine = FakeRedmine(error=RedmineError("Timeout"))
+    report = conclude(Settings(), card_repo, "42", "Corrigir login", commit=True, redmine_client=redmine)
+    assert report.commit
+    assert git(card_repo, "log", "-1", "--format=%s") == "hotfix(card-42): Corrigir login"

@@ -42,11 +42,27 @@ class DocumentationSettings:
     filename_template: str = "CARD-{card}.md"
 
 
+def _default_tracker_classification() -> dict[str, str]:
+    # Só tipos sem ambiguidade; "Correção" fica com o LLM (é usado tanto para bug urgente quanto para ajuste simples).
+    return {
+        "Nova funcionalidade": "feature",
+        "Evolução": "feature",
+        "Story": "feature",
+        "Incidente": "hotfix",
+        "Violação de segurança": "hotfix",
+        "GMUD-Software": "release",
+    }
+
+
 @dataclass(frozen=True)
 class RedmineSettings:
     url: str | None = None  # a variável REDMINE_URL tem precedência; a chave vem só de REDMINE_API_KEY
     timeout_seconds: int = 30
     verify_ssl: bool = True
+    # Tipo (rastreador) da tarefa -> classificação; tipos fora do mapa são classificados pelo LLM.
+    tracker_classification: dict[str, str] = field(default_factory=_default_tracker_classification)
+    # Campos personalizados da tarefa que entram na solicitação (nome exato, sem diferenciar maiúsculas).
+    custom_fields: tuple[str, ...] = ("critérios de aceitação",)
 
 
 @dataclass(frozen=True)
