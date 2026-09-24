@@ -95,7 +95,7 @@ escuta só em `127.0.0.1`, pois executa Git e o Claude Code na máquina local.
 Para anotar a tarefa, defina no `.env`:
 
 ```bash
-REDMINE_URL=https://redmine.exemplo.gov.br
+REDMINE_URL=https://projetos.ima.sp.gov.br
 REDMINE_API_KEY=<sua chave>   # Redmine → Minha conta → Chave de acesso à API
 ```
 
