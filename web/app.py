@@ -22,6 +22,7 @@ from typing import Any
 
 from flask import Flask, jsonify, request, send_from_directory
 
+from core.conclusion import ConclusionReport, conclude, conclusion_to_dict
 from core.exceptions import GitError, MissingInputError, PipelineCancelled, PipelineError
 from core.git_manager import GitManager
 from core.logging_config import setup_logging
@@ -109,6 +110,22 @@ class JobManager:
     def get(self, job_id: str) -> Job | None:
         return self._jobs.get(job_id)
 
+    def conclude(self, data: PipelineInput, commit: bool, claude_output: str = "") -> ConclusionReport:
+        """Conclui o card na hora (é rápido), ocupando o repositório para nenhuma execução trocar de branch no meio."""
+        key = self._repo_key(data.repo_path)
+        with self._lock:
+            if key in self._active:
+                raise PipelineBusyError(self._active[key])
+            self._active[key] = "conclusão"
+        try:
+            return conclude(
+                self.settings, data.repo_path, data.card_number, data.request,
+                commit=commit, claude_output=claude_output,
+            )
+        finally:
+            with self._lock:
+                self._active.pop(key, None)
+
     def cancel(self, job: Job) -> None:
         job.cancel_requested = True
         if job.pipeline:
@@ -169,6 +186,33 @@ def create_app(settings: Settings | None = None) -> Flask:
         except PipelineBusyError:
             return jsonify({"error": "Já existe uma execução em andamento neste repositório. Aguarde ou cancele."}), 409
         return jsonify(job.to_dict()), 202
+
+    @app.post("/api/conclusions")
+    def create_conclusion():
+        body = request.get_json(silent=True) or {}
+        try:
+            data = validate_input(
+                str(body.get("message", "")),
+                repo=str(body.get("repo") or "") or None,
+                card=str(body.get("card") or "") or None,
+                require_request=False,
+            )
+        except MissingInputError as exc:
+            return jsonify({"error": str(exc)}), 400
+
+        # Se vier de uma execução com implementação, o resumo do Claude Code entra no documento do card.
+        job = jobs.get(str(body.get("job_id") or ""))
+        claude = (job.result or {}).get("claude") if job else None
+        try:
+            report = jobs.conclude(data, commit=body.get("commit") is True, claude_output=(claude or {}).get("output", ""))
+        except PipelineBusyError:
+            return jsonify({"error": "Há uma execução em andamento neste repositório. Aguarde ou cancele."}), 409
+        except PipelineError as exc:
+            return jsonify({"error": str(exc)}), 422
+        except Exception:  # noqa: BLE001 - erro inesperado vai para o log, não para a tela
+            logger.exception("Erro inesperado na conclusão do card %s", data.card_number)
+            return jsonify({"error": "Erro inesperado na conclusão. Detalhes no log."}), 500
+        return jsonify(conclusion_to_dict(report))
 
     @app.post("/api/runs/<job_id>/cancel")
     def cancel_run(job_id: str):

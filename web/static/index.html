@@ -131,6 +131,11 @@
     background: transparent; color: var(--err);
     border: 1px solid var(--err); padding: 5px 12px; font-size: 13px;
   }
+  .conclude { margin-top: 16px; border-top: 1px solid var(--border); padding-top: 14px; }
+  .conclude-actions { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+  .conclude-actions label { display: flex; align-items: center; gap: 6px; font-size: 14px; color: var(--text); margin: 0; cursor: pointer; }
+  .conclude-actions input { width: auto; margin: 0; accent-color: var(--accent); }
+  .conclude-actions button { padding: 7px 14px; font-size: 14px; }
   .result { margin-top: 14px; border-top: 1px solid var(--border); padding-top: 14px; }
   .facts { display: grid; grid-template-columns: max-content 1fr; gap: 4px 14px; margin: 0 0 14px; font-size: 14px; }
   .facts dt { color: var(--muted); }
@@ -264,6 +269,21 @@
         <div class="metric"><div class="label">Tokens totais</div><div class="value" data-f="total"></div></div>
         <div class="metric" data-f="cost-box" hidden><div class="label">Custo Claude Code</div><div class="value" data-f="cost"></div></div>
       </div>
+      <div class="conclude">
+        <h3>Concluir card</h3>
+        <p class="note">Depois de implementar (aqui ou no Claude Code), gere o CARD-&lt;n&gt;.md com tudo o que mudou desde a base do branch.</p>
+        <div class="conclude-actions">
+          <label><input type="checkbox" class="conclude-commit"> Fazer commit</label>
+          <button type="button" class="conclude-btn">Concluir card</button>
+        </div>
+        <div class="conclude-result" hidden>
+          <dl class="facts">
+            <dt>Documento</dt><dd><code data-f="doc"></code></dd>
+            <dt>Commit</dt><dd><code data-f="commit"></code></dd>
+          </dl>
+          <ul class="files" data-f="conclude-files"></ul>
+        </div>
+      </div>
     </div>
   </section>
 </template>
@@ -395,7 +415,39 @@ function renderResult(section, r) {
   box.hidden = false;
 }
 
-async function poll(section, id) {
+function attachConclude(section, ctx) {
+  const btn = $(".conclude-btn", section), commitEl = $(".conclude-commit", section);
+  const box = $(".conclude-result", section);
+  const f = name => $(`[data-f="${name}"]`, box);
+  btn.addEventListener("click", async () => {
+    btn.disabled = true;
+    btn.textContent = "Concluindo…";
+    $(".error", section).hidden = true;
+    try {
+      const res = await fetch("/api/conclusions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ...ctx, commit: commitEl.checked }),
+      });
+      const r = await res.json();
+      if (!res.ok) throw new Error(r.error || res.statusText);
+      f("doc").textContent = r.document_path;
+      f("commit").textContent = !r.commit_requested ? "não solicitado" : r.commit || "nada a commitar";
+      f("conclude-files").replaceChildren(...(r.changed_files.length ? r.changed_files : ["(nenhum arquivo alterado)"])
+        .map(line => Object.assign(document.createElement("li"), { textContent: line })));
+      box.hidden = false;
+      btn.textContent = "Concluir de novo";
+    } catch (err) {
+      showError(section, `Não foi possível concluir o card: ${err.message}`);
+      btn.textContent = "Concluir card";
+    } finally {
+      btn.disabled = false;
+      scrollToEnd();
+    }
+  });
+}
+
+async function poll(section, id, ctx) {
   while (true) {
     let job;
     try {
@@ -410,7 +462,7 @@ async function poll(section, id) {
     renderSteps(section, job);
     if (job.status === "running") { await new Promise(r => setTimeout(r, POLL_MS)); continue; }
     finishRun(section);
-    if (job.status === "succeeded") renderResult(section, job.result);
+    if (job.status === "succeeded") { renderResult(section, job.result); attachConclude(section, ctx); }
     else if (job.status === "cancelled") Object.assign($(".notice", section), { textContent: job.error, hidden: false });
     else showError(section, job.error);
     scrollToEnd();
@@ -446,7 +498,7 @@ async function submit() {
   }
   // O envio só bloqueia durante o POST: execuções em repositórios diferentes acompanham em paralelo.
   $(".cancel", section).addEventListener("click", () => cancelRun(section, job.id));
-  poll(section, job.id);
+  poll(section, job.id, { repo, card, message, job_id: job.id });
 }
 
 form.addEventListener("submit", e => { e.preventDefault(); submit(); });

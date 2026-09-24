@@ -10,6 +10,10 @@ Pipeline do Agente AJ. A partir de um card (repositório + número + descrição
 5. **Resposta consolidada**: classificação, branch, tempo e tokens; com implementação, também o resumo do Claude Code,
    os arquivos alterados e o custo.
 
+Depois da implementação, feita pelo passo 4 ou por você no Claude Code, **conclua o card**: a pipeline confere que
+o repositório está no branch do card, lista tudo o que mudou desde a base do branch, gera o `CARD-<n>.md` e, se você
+pedir, faz o commit `<classificação>(card-<n>): <descrição>`.
+
 A escolha é feita a cada execução. Com a implementação ligada, o repositório precisa estar sem alterações pendentes
 (faça commit ou stash antes), assim os arquivos listados no final são só os que o Claude Code alterou. O Claude Code
 nunca faz commit, push nem troca de branch: a revisão e o commit ficam com você.
@@ -43,6 +47,9 @@ python main.py "repo: /caminho/do/repo card: 1425 Adicionar endpoint de health c
 
 # prepara o branch e já implementa com o Claude Code
 python main.py --implementar --repo /caminho/do/repo --card 1425 "Adicionar endpoint de health check"
+
+# conclui o card depois da implementação (descrição opcional; --commit faz o commit)
+python main.py --concluir --commit --repo /caminho/do/repo --card 1425 "Adicionar endpoint de health check"
 ```
 
 Sem repositório **e** número do card, a pipeline não executa nada.
@@ -63,7 +70,8 @@ python -m web.app --port 9000
 
 Mostra o progresso de cada passo em tempo real. A opção **Implementar com o Claude Code** decide se o passo 4
 roda; a escolha fica lembrada no navegador. Cada execução tem um botão **Cancelar**, que encerra o Claude Code na
-hora (as alterações parciais ficam no branch para você revisar ou descartar).
+hora (as alterações parciais ficam no branch para você revisar ou descartar). Execuções concluídas com sucesso
+mostram **Concluir card**, com a opção de fazer o commit.
 
 Execuções em repositórios diferentes rodam em paralelo; no mesmo repositório, só uma por vez. Por padrão o servidor
 escuta só em `127.0.0.1`, pois executa Git e o Claude Code na máquina local.
@@ -77,16 +85,26 @@ escuta só em `127.0.0.1`, pois executa Git e o Claude Code na máquina local.
 | `git` | branches protegidos (onde a pipeline cria o branch do card) e timeout dos comandos |
 | `classifier` | modelo, `max_tokens` e timeout do classificador |
 | `claude_code` | executável, modelo, modo de permissão e timeout do Claude Code (passo 4) |
+| `documentation` | nome do documento gerado na conclusão (padrão `CARD-{card}.md`) |
 | `logging` | nível e arquivo de log (padrão `logs/pipeline.log`) |
 
-A seção `documentation` pertence a um módulo ainda não integrado à pipeline.
+## Testes
+
+```bash
+pip install -r requirements-dev.txt
+python -m pytest
+```
+
+Os testes usam repositórios Git temporários e substitutos do classificador e do Claude Code: não gastam tokens nem
+mexem em repositórios reais.
 
 ## Estrutura
 
 ```
 main.py              CLI
 web/                 interface web (Flask + página estática)
-core/                validação, Git, classificador, orquestração dos passos
+core/                validação, Git, classificador, orquestração dos passos, conclusão do card
 integration/         execução do Claude Code em modo headless (passo 4)
 config/settings.yaml configuração
+tests/               testes (pytest)
 ```

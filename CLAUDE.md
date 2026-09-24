@@ -8,24 +8,31 @@ Pipeline do "Agente AJ": recebe um card (caminho do repositório + número do ca
 classifica a solicitação como `feature` / `hotfix` / `release` com um LLM e prepara o branch `<classificação>/card-<n>`.
 A implementação (passo 4) é opcional e escolhida a cada execução (`--implementar` na CLI, checkbox na web): ou a pipeline
 roda o Claude Code em modo headless no branch, ou é pulada e o relatório orienta abrir o Claude Code manualmente.
+Nos dois casos o usuário volta depois pelo modo **concluir** (`--concluir [--commit]`, botão na web), que gera o
+`CARD-<n>.md` com as alterações desde a base do branch e, opcionalmente, faz o commit padronizado.
 Todo o código, os comentários e as mensagens para o usuário são em português.
 
 ## Comandos
 
 ```bash
-pip install -r requirements.txt
+pip install -r requirements-dev.txt       # dependências + pytest
 cp .env.example .env                      # credenciais (ANTHROPIC_API_KEY)
+
+python -m pytest                                          # todos os testes
+python -m pytest tests/test_pipeline.py -k cancelado      # um arquivo / filtro por nome
 
 python main.py --repo /caminho/repo --card 1425 "descrição"        # CLI
 python main.py "repo: /caminho/repo card: 1425 descrição"           # repo/card embutidos na mensagem
 python main.py --implementar --repo /caminho/repo --card 1425 "…"  # também implementa via Claude Code
+python main.py --concluir --commit --repo /caminho/repo --card 1425 # fecha o card (descrição opcional)
 python -m web.app [--port 9000]                                     # UI web em 127.0.0.1:8000
 ```
 
-Ainda não há testes, lint nem build. Para testar sem mexer em repositórios reais, crie um repo descartável
-(`git init -b main && git commit --allow-empty -m init`) e aponte `--repo` para ele: o passo 3 faz `git checkout`
-no repositório-alvo. Para exercitar o passo 4 sem gastar tokens, aponte `claude_code.binary` para um script que imprima um
-JSON no formato de `claude -p --output-format json` (`result`, `usage`, `total_cost_usd`, `duration_ms`, `is_error`).
+Não há lint nem build. Os testes nunca chamam a API nem o Claude Code reais: `tests/conftest.py` fornece repositórios
+Git descartáveis (`make_repo`/`repo`), `FakeClassifier` e `fake_claude`, que gera um executável imitando
+`claude -p --output-format json` (pode criar arquivo, demorar com processo filho e registrar os argumentos recebidos).
+Pipeline, web e CLI recebem o classificador falso via `monkeypatch` em `core.pipeline.RequestClassifier`; os testes de
+cancelamento e timeout conferem que o processo filho morreu.
 
 Códigos de saída da CLI: `0` ok, `2` entrada inválida, `1` falha da pipeline, `130` interrompida.
 
@@ -56,10 +63,10 @@ Códigos de saída da CLI: `0` ok, `2` entrada inválida, `1` falha da pipeline,
   sessão própria (`start_new_session`) para que cancelamento, timeout e Ctrl+C matem o grupo de processos inteiro.
   Com implementação ligada, o passo 1 exige working tree limpo, então `report.changed_files` (o `git status` depois do
   passo 4) contém só o que o Claude Code alterou.
+- **Conclusão** (`core/conclusion.py`): independente da `Pipeline`. Exige estar no branch
+  `<classificação>/card-<n>` (a classificação sai do nome do branch, sem LLM), compara com o `merge-base` do primeiro
+  branch protegido existente, gera o documento via `core/documentation.py` (o próprio `CARD-<n>.md` fica fora da lista) e,
+  com commit, faz `git add -A` + `<classificação>(card-<n>): <1ª linha da descrição>`. Na web (`POST /api/conclusions`)
+  ocupa o bloqueio do repositório e, com `job_id`, inclui o resumo do Claude Code daquela execução.
 - **Classificador** (`core/classifier.py`): SDK da Anthropic, modelo leve, `max_tokens` baixo; extrai o rótulo por regex
   sobre `VALID_CLASSIFICATIONS` (`core/models.py`). Os tokens consumidos entram no relatório via `TokenUsage`.
-
-## Código ainda não integrado
-
-`core/documentation.py` (gera `CARD-<n>.md` no repo) **não é chamado pela pipeline**, assim como a seção `documentation`
-do `settings.yaml`.

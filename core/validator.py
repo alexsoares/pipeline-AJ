@@ -38,8 +38,13 @@ def _extract(pattern: re.Pattern[str], text: str) -> tuple[str | None, str]:
     return value, remaining
 
 
-def validate_input(message: str, repo: str | None = None, card: str | None = None) -> PipelineInput:
-    """Valida a entrada do chat. Levanta MissingInputError se faltar repositório ou card."""
+def validate_input(
+    message: str, repo: str | None = None, card: str | None = None, *, require_request: bool = True
+) -> PipelineInput:
+    """Valida a entrada do chat. Levanta MissingInputError se faltar repositório ou card.
+
+    `require_request=False` aceita descrição vazia (conclusão do card, em que ela é opcional).
+    """
     request = (message or "").strip()
 
     repo_from_msg, request = _extract(_REPO_PATTERN, request)
@@ -67,7 +72,7 @@ def validate_input(message: str, repo: str | None = None, card: str | None = Non
     if not repo_path.is_dir():
         raise MissingInputError(f"O caminho do repositório não existe ou não é um diretório: {repo_path}")
 
-    if not request:
+    if require_request and not request:
         raise MissingInputError("A descrição da tarefa está vazia: informe o que deve ser feito no card.")
 
     return PipelineInput(repo_path=repo_path, card_number=card, request=request)

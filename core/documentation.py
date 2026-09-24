@@ -1,60 +1,58 @@
-"""Passo 5: gera o Markdown do card na raiz do repositório."""
+"""Gera o Markdown do card (CARD-<n>.md) na raiz do repositório."""
 
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 
 from core.exceptions import DocumentationError
-from core.models import PipelineReport
 
 logger = logging.getLogger(__name__)
 
 
-def _render(report: PipelineReport, diff_stat: str) -> str:
-    usage = report.claude.usage if report.claude else None
-    files = "\n".join(f"- `{line}`" for line in report.changed_files) or "_Nenhum arquivo alterado._"
+@dataclass(frozen=True)
+class CardDocument:
+    card: str
+    classification: str
+    branch: str
+    base: str
+    request: str = ""
+    changed_files: list[str] = field(default_factory=list)
+    diff_stat: str = ""
+    claude_output: str = ""
 
+
+def render(doc: CardDocument) -> str:
+    files = "\n".join(f"- `{line}`" for line in doc.changed_files) or "_Nenhum arquivo alterado._"
     lines = [
-        f"# Card {report.input.card_number}",
+        f"# Card {doc.card}",
         "",
         f"- **Data:** {datetime.now():%Y-%m-%d %H:%M:%S}",
-        f"- **Classificação:** {report.classification.classification if report.classification else '-'}",
-        f"- **Branch:** {report.branch.name if report.branch else '-'}",
+        f"- **Classificação:** {doc.classification}",
+        f"- **Branch:** `{doc.branch}` (base: `{doc.base}`)",
         "",
         "## Solicitação",
         "",
-        report.input.request,
+        doc.request or "_Não informada._",
         "",
         "## Arquivos alterados",
         "",
         files,
         "",
     ]
-    if diff_stat:
-        lines += ["## Resumo do diff", "", "```", diff_stat, "```", ""]
-    lines += [
-        "## Resumo do Claude Code",
-        "",
-        report.claude.output if report.claude else "_Sem saída._",
-        "",
-    ]
-    if usage:
-        lines += [
-            "## Consumo do Claude Code",
-            "",
-            f"- Tokens de entrada: {usage.total_input}",
-            f"- Tokens de saída: {usage.output_tokens}",
-            "",
-        ]
+    if doc.diff_stat:
+        lines += ["## Resumo do diff", "", "```", doc.diff_stat, "```", ""]
+    if doc.claude_output:
+        lines += ["## Resumo do Claude Code", "", doc.claude_output, ""]
     return "\n".join(lines)
 
 
-def write_card_document(report: PipelineReport, filename_template: str, diff_stat: str = "") -> Path:
-    path = report.input.repo_path / filename_template.format(card=report.input.card_number)
+def write_card_document(repo_path: Path, filename_template: str, doc: CardDocument) -> Path:
+    path = repo_path / filename_template.format(card=doc.card)
     try:
-        path.write_text(_render(report, diff_stat), encoding="utf-8")
+        path.write_text(render(doc), encoding="utf-8")
     except OSError as exc:
         raise DocumentationError(f"Não foi possível gravar {path}: {exc}") from exc
     logger.info("Documento do card gerado em %s", path)

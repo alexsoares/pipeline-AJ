@@ -87,7 +87,28 @@ class GitManager:
         logger.info("Branch '%s' criado a partir de '%s'.", name, current)
         return BranchResult(name=name, created=True, switched=True)
 
-    # --- Passo 5 -----------------------------------------------------------
+    # --- Conclusão do card --------------------------------------------------
 
-    def diff_stat(self) -> str:
-        return self._run("diff", "--stat", "HEAD", check=False).stdout.strip()
+    def base_commit(self, protected: tuple[str, ...]) -> tuple[str, str]:
+        """Ponto em que o branch atual saiu do primeiro branch protegido existente: (nome do protegido, commit)."""
+        for name in protected:
+            if self.branch_exists(name):
+                return name, self._run("merge-base", "HEAD", name).stdout.strip()
+        raise GitError(f"Nenhum branch base encontrado ({', '.join(protected)}) para comparar as alterações do card.")
+
+    def changes_since(self, base: str) -> list[str]:
+        """Alterações desde `base` (commitadas ou não) em formato name-status, mais os arquivos não rastreados."""
+        tracked = self._run("diff", "--name-status", base).stdout.splitlines()
+        untracked = self._run("ls-files", "--others", "--exclude-standard").stdout.splitlines()
+        return [line.replace("\t", " ") for line in tracked if line.strip()] + [f"?? {path}" for path in untracked if path]
+
+    def diff_stat(self, base: str = "HEAD") -> str:
+        return self._run("diff", "--stat", base, check=False).stdout.strip()
+
+    def commit_all(self, message: str) -> str | None:
+        """Faz `git add -A` e commit. Retorna o hash curto, ou None se não houver nada para commitar."""
+        self._run("add", "-A")
+        if self._run("diff", "--cached", "--quiet", check=False).returncode == 0:
+            return None
+        self._run("commit", "-m", message)
+        return self._run("rev-parse", "--short", "HEAD").stdout.strip()
