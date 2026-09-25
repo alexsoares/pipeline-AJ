@@ -156,6 +156,12 @@ O projeto é identificado pelo remoto `origin` do repositório, que precisa apon
 pendentes (marque o commit) e com ao menos um commit além da base; se já existir um MR aberto para o branch, ele é
 reaproveitado.
 
+## Validação com os serviços reais
+
+Antes de usar em cards de verdade, siga o [roteiro de validação segura](docs/ROTEIRO-VALIDACAO.md): ele sobe o
+risco aos poucos, começando num repositório descartável, com o Redmine só em leitura e as escritas externas
+(Redmine e Ginner) como etapas opcionais em tarefa e projeto de teste.
+
 ## Testes
 
 ```bash
