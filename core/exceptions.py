@@ -29,6 +29,10 @@ class RedmineError(PipelineError):
     """Falha ao anotar a tarefa no Redmine."""
 
 
+class GitLabError(PipelineError):
+    """Falha ao abrir o merge request no GitLab."""
+
+
 class PipelineCancelled(PipelineError):
     """Execução cancelada pelo usuário."""
 

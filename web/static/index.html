@@ -58,6 +58,15 @@
     background: var(--surface);
   }
   header h1 { margin: 0; font-size: 17px; }
+  #history { margin-top: 8px; font-size: 13px; }
+  #history summary { cursor: pointer; color: var(--accent); width: fit-content; }
+  #history .history-body { max-height: 45vh; overflow: auto; margin-top: 8px; }
+  #history table { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; }
+  #history th, #history td { text-align: left; padding: 4px 8px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+  #history th { color: var(--muted); font-weight: 600; }
+  #history td.num, #history th.num { text-align: right; }
+  #history .st-failed, #history .st-partial { color: var(--err); }
+  #history .st-succeeded { color: var(--ok); }
   header p { margin: 2px 0 0; color: var(--muted); font-size: 13px; }
 
   #transcript {
@@ -126,6 +135,18 @@
     white-space: pre-wrap;
     overflow-wrap: anywhere;
   }
+  .progress {
+    margin: 10px 0 0 30px;
+    max-height: 220px;
+    overflow-y: auto;
+    background: var(--surface-2);
+    border-radius: 8px;
+    padding: 8px 10px;
+    font: 12px/1.5 var(--mono);
+    color: var(--muted);
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
   .run-actions { display: flex; justify-content: flex-end; margin-top: 10px; }
   .run-actions button {
     background: transparent; color: var(--err);
@@ -135,6 +156,7 @@
   .conclude-actions { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
   .conclude-actions label { display: flex; align-items: center; gap: 6px; font-size: 14px; color: var(--text); margin: 0; cursor: pointer; }
   .conclude-actions input { width: auto; margin: 0; accent-color: var(--accent); }
+  .conclude-actions input[type="number"] { width: 80px; padding: 4px 6px; }
   .conclude-actions button { padding: 7px 14px; font-size: 14px; }
   .result { margin-top: 14px; border-top: 1px solid var(--border); padding-top: 14px; }
   .facts { display: grid; grid-template-columns: max-content 1fr; gap: 4px 14px; margin: 0 0 14px; font-size: 14px; }
@@ -208,6 +230,10 @@
   <div class="inner">
     <h1>Agente AJ</h1>
     <p>Descreva a tarefa do card. A pipeline classifica e prepara o branch; a implementação pode ser feita aqui, pelo Claude Code, ou depois, por você.</p>
+    <details id="history">
+      <summary>Histórico</summary>
+      <div class="history-body"><p class="note">Carregando…</p></div>
+    </details>
   </div>
 </header>
 
@@ -246,6 +272,7 @@
   <div class="user-msg"><small></small><span class="text"></span></div>
   <section class="run">
     <ol class="steps"></ol>
+    <pre class="progress" hidden></pre>
     <div class="run-actions"><button type="button" class="cancel">Cancelar</button></div>
     <div class="error" hidden></div>
     <div class="notice" hidden></div>
@@ -275,16 +302,24 @@
         <p class="note">Depois de implementar (aqui ou no Claude Code), gere o CARD-&lt;n&gt;.md com tudo o que mudou desde a base do branch.</p>
         <div class="conclude-actions">
           <label><input type="checkbox" class="conclude-commit"> Fazer commit</label>
+          <label><input type="checkbox" class="conclude-mr"> Abrir merge request no Ginner</label>
           <label><input type="checkbox" class="conclude-redmine"> Anotar na tarefa do Redmine</label>
+          <label><input type="checkbox" class="conclude-status"> <span class="conclude-status-label">Mudar status</span></label>
+          <label>Horas <input type="number" class="conclude-hours" min="0" step="0.25" placeholder="0"></label>
           <button type="button" class="conclude-btn">Concluir card</button>
         </div>
+        <p class="note conclude-hint"></p>
         <div class="conclude-result" hidden>
           <dl class="facts">
             <dt>Documento</dt><dd><code data-f="doc"></code></dd>
             <dt>Commit</dt><dd><code data-f="commit"></code></dd>
-            <dt>Redmine</dt><dd data-f="redmine"></dd>
+            <dt>Merge request</dt><dd data-f="mr"></dd>
+            <dt>Nota no Redmine</dt><dd data-f="note"></dd>
+            <dt>Status no Redmine</dt><dd data-f="status"></dd>
+            <dt>Horas no Redmine</dt><dd data-f="hours"></dd>
           </dl>
           <ul class="files" data-f="conclude-files"></ul>
+          <div class="error" data-f="conclude-errors" hidden></div>
         </div>
       </div>
     </div>
@@ -300,6 +335,7 @@ const form = $("#form"), repoEl = $("#repo"), cardEl = $("#card"), msgEl = $("#m
 const implementEl = $("#implement"), implementHint = $("#implement-hint");
 let steps = [];
 let redmineOn = false;
+let appConfig = {};
 let busy = false;
 
 function store(key, value) { try { localStorage.setItem(key, value); } catch {} }
@@ -325,10 +361,11 @@ async function loadSteps() {
 
 async function loadConfig() {
   try {
-    redmineOn = (await (await fetch("/api/config")).json()).redmine === true;
+    appConfig = await (await fetch("/api/config")).json();
   } catch {
-    redmineOn = false;
+    appConfig = {};
   }
+  redmineOn = appConfig.redmine === true;
   if (redmineOn) msgEl.placeholder = "Opcional: a descrição vem da tarefa no Redmine (o que digitar aqui entra como observação)";
 }
 
@@ -369,6 +406,13 @@ function renderSteps(section, job) {
     const state = job.steps[li.dataset.step] || "";
     li.className = state;
     $(".dot", li).textContent = { done: "✓", failed: "✕", skipped: "–", cancelled: "■" }[state] || "";
+  }
+  const progress = $(".progress", section);
+  if (job.progress && job.progress.length) {
+    const atBottom = progress.scrollTop + progress.clientHeight >= progress.scrollHeight - 4;
+    progress.textContent = job.progress.map(line => `› ${line}`).join("\n");
+    progress.hidden = false;
+    if (atBottom) progress.scrollTop = progress.scrollHeight;
   }
   const btn = $(".cancel", section);
   if (btn && job.cancel_requested) { btn.disabled = true; btn.textContent = "Cancelando…"; }
@@ -415,7 +459,12 @@ function renderResult(section, r) {
     f("issue").replaceChildren(link, meta);
     f("issue").hidden = f("issue-label").hidden = false;
   }
-  f("branch").textContent = r.branch ? `${r.branch.name} (${r.branch.created ? "criado" : "existente"})` : "-";
+  const b = r.branch;
+  f("branch").textContent = !b ? "-"
+    : `${b.name} (${b.created ? (b.start_point ? `criado a partir de ${b.start_point}` : "criado") : "existente"})`;
+  if (b && b.warning) {
+    f("branch").after(Object.assign(document.createElement("div"), { className: "note", textContent: `⚠️ ${b.warning}` }));
+  }
   f("next").textContent = r.claude
     ? "Próximo passo: revise as alterações no branch e faça o commit."
     : "Próximo passo: abra o Claude Code no repositório e implemente o card nesse branch.";
@@ -441,27 +490,41 @@ function renderResult(section, r) {
   box.hidden = false;
 }
 
-function renderRedmine(cell, r) {
+function renderOutcome(cell, requested, value, { link = false, doneText = null } = {}) {
   cell.replaceChildren();
   cell.style.color = "";
-  if (!r.redmine_requested) { cell.textContent = "não solicitado"; return; }
-  if (r.redmine_url) {
-    const a = Object.assign(document.createElement("a"), { href: r.redmine_url, target: "_blank", rel: "noopener", textContent: "nota adicionada na tarefa" });
-    cell.append(a);
-    return;
+  if (!requested) { cell.textContent = "não solicitado"; return; }
+  if (!value) { cell.textContent = "falhou (veja abaixo)"; cell.style.color = "var(--err)"; return; }
+  if (link) {
+    cell.append(Object.assign(document.createElement("a"), {
+      href: value, target: "_blank", rel: "noopener", textContent: doneText || value,
+    }));
+  } else {
+    cell.textContent = value;
   }
-  cell.textContent = `falhou: ${r.redmine_error}`;
-  cell.style.color = "var(--err)";
 }
 
 function attachConclude(section, ctx) {
-  const btn = $(".conclude-btn", section), commitEl = $(".conclude-commit", section);
-  const redmineEl = $(".conclude-redmine", section);
-  redmineEl.checked = recall("aj.redmine") === "1";
-  redmineEl.addEventListener("change", () => store("aj.redmine", redmineEl.checked ? "1" : "0"));
-  const box = $(".conclude-result", section);
+  const btn = $(".conclude-btn", section), box = $(".conclude-result", section);
+  const el = name => $(`.conclude-${name}`, section);
   const f = name => $(`[data-f="${name}"]`, box);
+
+  // Valores iniciais: MR pela configuração; o restante lembra a última escolha neste navegador.
+  el("mr").checked = appConfig.merge_request_default === true;
+  el("redmine").checked = recall("aj.redmine") === "1";
+  el("redmine").addEventListener("change", () => store("aj.redmine", el("redmine").checked ? "1" : "0"));
+  $(".conclude-status-label", section).textContent = `Mudar status para “${appConfig.conclusion_status || "Homologar"}”`;
+  const missing = [
+    !appConfig.gitlab && "GitLab (GITLAB_URL/GITLAB_TOKEN)",
+    !appConfig.redmine && "Redmine (REDMINE_URL/REDMINE_API_KEY)",
+  ].filter(Boolean);
+  $(".conclude-hint", section).textContent = [
+    missing.length ? `Não configurado no .env: ${missing.join(" e ")}.` : "",
+    appConfig.time_entry_activity ? `Horas lançadas como “${appConfig.time_entry_activity}”.` : "",
+  ].filter(Boolean).join(" ");
+
   btn.addEventListener("click", async () => {
+    const hours = el("hours").value.trim();
     btn.disabled = true;
     btn.textContent = "Concluindo…";
     $(".error", section).hidden = true;
@@ -469,15 +532,29 @@ function attachConclude(section, ctx) {
       const res = await fetch("/api/conclusions", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ...ctx, commit: commitEl.checked, redmine: redmineEl.checked }),
+        body: JSON.stringify({
+          ...ctx,
+          commit: el("commit").checked,
+          merge_request: el("mr").checked,
+          redmine: el("redmine").checked,
+          status: el("status").checked ? appConfig.conclusion_status : null,
+          hours: hours ? Number(hours) : null,
+        }),
       });
       const r = await res.json();
       if (!res.ok) throw new Error(r.error || res.statusText);
+      const req = r.requested;
       f("doc").textContent = r.document_path;
-      f("commit").textContent = !r.commit_requested ? "não solicitado" : r.commit || "nada a commitar";
-      renderRedmine(f("redmine"), r);
+      f("commit").textContent = !req.commit ? "não solicitado" : r.commit || "nada a commitar";
+      renderOutcome(f("mr"), req.merge_request, r.merge_request_url, { link: true });
+      renderOutcome(f("note"), req.redmine_note, r.redmine_url, { link: true, doneText: "nota adicionada na tarefa" });
+      renderOutcome(f("status"), !!req.redmine_status, r.status_applied);
+      renderOutcome(f("hours"), !!req.hours, r.hours_logged);
       f("conclude-files").replaceChildren(...(r.changed_files.length ? r.changed_files : ["(nenhum arquivo alterado)"])
         .map(line => Object.assign(document.createElement("li"), { textContent: line })));
+      const errors = f("conclude-errors");
+      errors.textContent = r.errors.length ? `Falhas (documento e commit foram mantidos):\n• ${r.errors.join("\n• ")}` : "";
+      errors.hidden = !r.errors.length;
       box.hidden = false;
       btn.textContent = "Concluir de novo";
     } catch (err) {
@@ -548,6 +625,51 @@ form.addEventListener("submit", e => { e.preventDefault(); submit(); });
 msgEl.addEventListener("keydown", e => {
   if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); submit(); }
 });
+
+const STATUS_LABEL = { succeeded: "sucesso", failed: "falhou", cancelled: "cancelada", partial: "parcial" };
+
+function historyTable(headers, rows) {
+  const table = document.createElement("table");
+  const head = table.createTHead().insertRow();
+  for (const [label, num] of headers) head.append(Object.assign(document.createElement("th"), { textContent: label, className: num ? "num" : "" }));
+  const body = table.createTBody();
+  for (const row of rows) {
+    const tr = body.insertRow();
+    row.forEach(([value, cls], i) => Object.assign(tr.insertCell(), { textContent: value, className: [headers[i][1] ? "num" : "", cls || ""].join(" ").trim() }));
+  }
+  return table;
+}
+
+async function loadHistory() {
+  const body = $("#history .history-body");
+  try {
+    const data = await (await fetch("/api/history?limit=100")).json();
+    if (!data.enabled) { body.replaceChildren(Object.assign(document.createElement("p"), { className: "note", textContent: "Histórico desativado no settings.yaml." })); return; }
+    if (!data.items.length) { body.replaceChildren(Object.assign(document.createElement("p"), { className: "note", textContent: "Nenhuma execução registrada." })); return; }
+    const money = v => v == null ? "-" : `US$ ${Number(v).toLocaleString("pt-BR", { minimumFractionDigits: 4, maximumFractionDigits: 4 })}`;
+    const parts = [];
+    if (data.summary.length) {
+      parts.push(Object.assign(document.createElement("h3"), { textContent: "Totais por mês" }));
+      parts.push(historyTable(
+        [["Mês"], ["Execuções", 1], ["Sucesso", 1], ["Com Claude Code", 1], ["Tokens", 1], ["Custo", 1]],
+        data.summary.map(m => [[m.month], [m.runs], [m.succeeded], [m.implemented], [fmt.format((m.input_tokens || 0) + (m.output_tokens || 0))], [money(m.cost_usd)]]),
+      ));
+    }
+    parts.push(Object.assign(document.createElement("h3"), { textContent: "Últimas execuções" }));
+    parts.push(historyTable(
+      [["Início"], ["Tipo"], ["Card"], ["Status"], ["Classificação"], ["Branch"], ["Tokens", 1], ["Custo", 1], ["Erro"]],
+      data.items.map(i => [
+        [i.started_at.replace("T", " ")], [i.kind === "pipeline" ? "execução" : "conclusão"], [`#${i.card}`],
+        [STATUS_LABEL[i.status] || i.status, `st-${i.status}`], [i.classification || "-"], [i.branch || "-"],
+        [fmt.format(i.input_tokens + i.output_tokens)], [money(i.cost_usd)], [i.error ? i.error.slice(0, 80) : ""],
+      ]),
+    ));
+    body.replaceChildren(...parts);
+  } catch (err) {
+    body.replaceChildren(Object.assign(document.createElement("p"), { className: "note", textContent: `Não foi possível carregar o histórico: ${err.message}` }));
+  }
+}
+$("#history").addEventListener("toggle", e => { if (e.target.open) loadHistory(); });
 
 loadSteps();
 loadConfig();

@@ -34,21 +34,20 @@ class RedmineClient:
             raise RedmineError(f"Redmine não configurado: defina {' e '.join(missing)} no .env.")
         return url, key
 
-    def _request(self, method: str, issue_id: str, **kwargs) -> tuple[str, httpx.Response]:
+    def _request(self, method: str, path: str, issue_id: str = "", **kwargs) -> tuple[str, httpx.Response]:
+        """Chama `<url><path>`; retorna (URL da tarefa `issue_id`, resposta)."""
         url, key = self._credentials()
         try:
             with httpx.Client(
                 timeout=self.settings.timeout_seconds, verify=self.settings.verify_ssl, transport=self.transport
             ) as client:
-                response = client.request(
-                    method, f"{url}/issues/{issue_id}.json", headers={"X-Redmine-API-Key": key}, **kwargs
-                )
+                response = client.request(method, f"{url}{path}", headers={"X-Redmine-API-Key": key}, **kwargs)
         except httpx.TimeoutException as exc:
             raise RedmineError(f"Timeout ao falar com o Redmine ({url}).") from exc
         except httpx.HTTPError as exc:
             raise RedmineError(f"Falha de conexão com o Redmine ({url}): {exc}") from exc
 
-        if response.status_code in (200, 204):
+        if response.status_code in (200, 201, 204):
             return f"{url}/issues/{issue_id}", response
         if response.status_code == 404:
             raise RedmineError(f"Tarefa {issue_id} não encontrada no Redmine (ou sem acesso a ela).")
@@ -66,7 +65,7 @@ class RedmineClient:
         raise RedmineError(f"Erro do Redmine (HTTP {response.status_code}): {response.text[:300]}")
 
     def get_issue(self, issue_id: str) -> RedmineIssue:
-        issue_url, response = self._request("GET", issue_id)
+        issue_url, response = self._request("GET", f"/issues/{issue_id}.json", issue_id)
         try:
             issue = response.json()["issue"]
         except (ValueError, KeyError) as exc:
@@ -93,6 +92,39 @@ class RedmineClient:
 
     def add_note(self, issue_id: str, notes: str) -> str:
         """Adiciona `notes` ao histórico da tarefa. Retorna a URL da tarefa."""
-        issue_url, _ = self._request("PUT", issue_id, json={"issue": {"notes": notes}})
-        logger.info("Nota adicionada na tarefa %s do Redmine", issue_id)
-        return issue_url
+        return self.update_issue(issue_id, notes=notes)[0]
+
+    def _named_id(self, path: str, key: str, name: str, what: str) -> int:
+        _, response = self._request("GET", path)
+        options = response.json().get(key, [])
+        for option in options:
+            if str(option.get("name", "")).strip().casefold() == name.strip().casefold():
+                return int(option["id"])
+        names = ", ".join(str(o.get("name")) for o in options)
+        raise RedmineError(f"{what} '{name}' não existe no Redmine. Opções: {names}.")
+
+    def update_issue(
+        self, issue_id: str, notes: str | None = None, status: str | None = None
+    ) -> tuple[str, str | None]:
+        """Anota e/ou muda o status numa única atualização. Retorna (URL da tarefa, status atual se `status`).
+
+        O Redmine ignora em silêncio transições que o fluxo de trabalho não permite, por isso o status é relido:
+        quem chama compara com o pedido.
+        """
+        fields: dict[str, object] = {}
+        if notes:
+            fields["notes"] = notes
+        if status:
+            fields["status_id"] = self._named_id("/issue_statuses.json", "issue_statuses", status, "Status")
+        issue_url, _ = self._request("PUT", f"/issues/{issue_id}.json", issue_id, json={"issue": fields})
+        logger.info("Tarefa %s atualizada no Redmine (nota=%s, status=%s)", issue_id, bool(notes), status)
+        return issue_url, self.get_issue(issue_id).status if status else None
+
+    def log_time(self, issue_id: str, hours: float, activity: str, comments: str = "") -> None:
+        activity_id = self._named_id(
+            "/enumerations/time_entry_activities.json", "time_entry_activities", activity, "Atividade"
+        )
+        self._request("POST", "/time_entries.json", issue_id, json={"time_entry": {
+            "issue_id": int(issue_id), "hours": hours, "activity_id": activity_id, "comments": comments[:255],
+        }})
+        logger.info("%.2f h lançadas na tarefa %s (%s)", hours, issue_id, activity)

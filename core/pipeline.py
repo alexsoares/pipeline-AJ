@@ -11,12 +11,14 @@ from __future__ import annotations
 import logging
 import threading
 import time
+from datetime import datetime
 from collections.abc import Callable
 from typing import Any, TypeVar
 
 from core.classifier import RequestClassifier
 from core.exceptions import ClassificationError, GitError, MissingInputError, PipelineCancelled, PipelineError
 from core.git_manager import GitManager
+from core.history import History
 from core.models import (
     VALID_CLASSIFICATIONS,
     ClassificationResult,
@@ -28,7 +30,7 @@ from core.models import (
     compose_request,
 )
 from core.settings import Settings
-from integration.claude_runner import ClaudeCodeRunner
+from integration.claude_runner import ClaudeCodeRunner, ProgressCallback
 from integration.redmine import RedmineClient, redmine_configured
 
 logger = logging.getLogger(__name__)
@@ -72,11 +74,15 @@ class Pipeline:
         runner: ClaudeCodeRunner | None = None,
         on_step: StepCallback | None = None,
         redmine: RedmineClient | None = None,
+        on_progress: ProgressCallback | None = None,
+        history: History | None = None,
     ) -> None:
         self.settings = settings
         self.classifier = classifier or RequestClassifier(settings.classifier)
         self.runner = runner or ClaudeCodeRunner(settings.claude_code)
         self.redmine = redmine or RedmineClient(settings.redmine)
+        self.on_progress = on_progress  # frases de progresso do Claude Code (passo 5)
+        self.history = history
         self.on_step = on_step
         self._cancelled = threading.Event()
 
@@ -133,7 +139,9 @@ class Pipeline:
             raise MissingInputError(MISSING_REQUEST)
 
         started = time.perf_counter()
+        started_at = datetime.now().isoformat(timespec="seconds")
         report = PipelineReport(input=data, implement=implement)
+        status, error = "failed", None
         git = GitManager(data.repo_path, self.settings.git.command_timeout_seconds)
 
         def check_status() -> GitStatus:
@@ -161,23 +169,46 @@ class Pipeline:
 
             report.classification = self._step(3, lambda: self._classify(report.issue, request))
 
-            branch_name = f"{report.classification.classification}/card-{data.card_number}"
+            classification = report.classification.classification
+            branch_name = f"{classification}/card-{data.card_number}"
+            git_settings = self.settings.git
             report.branch = self._step(
-                4, lambda: git.ensure_work_branch(branch_name, self.settings.git.protected_branches)
+                4,
+                lambda: git.ensure_work_branch(
+                    branch_name,
+                    git_settings.protected_branches,
+                    base=git_settings.base_branches.get(classification),
+                    remote=git_settings.remote,
+                    fetch=git_settings.fetch,
+                    network_timeout=git_settings.network_timeout_seconds,
+                ),
             )
 
             if implement:
-                classification = report.classification.classification
                 report.claude = self._step(
                     IMPLEMENT_STEP,
-                    lambda: self.runner.run(data.repo_path, data.card_number, classification, request),
+                    lambda: self.runner.run(
+                        data.repo_path, data.card_number, classification, request, on_progress=self.on_progress
+                    ),
                 )
                 report.changed_files = git.changed_files()
             else:
                 self._notify(IMPLEMENT_STEP, "skipped")
             self._step(FINAL_STEP, lambda: None)
+            status = "succeeded"
+        except PipelineCancelled as exc:
+            status, error = "cancelled", str(exc)
+            raise
+        except KeyboardInterrupt:
+            status, error = "cancelled", "Interrompida pelo usuário."
+            raise
+        except Exception as exc:
+            error = str(exc)
+            raise
         finally:
             report.elapsed_seconds = time.perf_counter() - started
+            if self.history:
+                self.history.record_run(report, started_at, status, error)
         return report
 
 
@@ -185,7 +216,12 @@ def format_report(report: PipelineReport) -> str:
     """Passo 6: resposta consolidada para o chat."""
     usage = report.total_usage
     branch = report.branch
-    branch_info = f"{branch.name} ({'criado' if branch.created else 'existente'})" if branch else "-"
+    branch_info = "-"
+    if branch:
+        origin = f"criado a partir de {branch.start_point}" if branch.created and branch.start_point else (
+            "criado" if branch.created else "existente"
+        )
+        branch_info = f"{branch.name} ({origin})"
 
     lines = [
         f"==================== AGENTE AJ | Card {report.input.card_number} ====================",
@@ -201,8 +237,10 @@ def format_report(report: PipelineReport) -> str:
     lines += [
         f"Classificação : {_classification_label(report)}",
         f"Branch        : {branch_info}",
-        "",
     ]
+    if branch and branch.warning:
+        lines.append(f"Aviso         : {branch.warning}")
+    lines.append("")
     if report.claude:
         files = [f"  {line}" for line in report.changed_files] or ["  (nenhum arquivo alterado)"]
         lines += [
@@ -269,7 +307,12 @@ def report_to_dict(report: PipelineReport) -> dict[str, Any]:
         } if issue else None,
         "classification": report.classification.classification if report.classification else None,
         "classification_source": report.classification.source if report.classification else None,
-        "branch": {"name": report.branch.name, "created": report.branch.created} if report.branch else None,
+        "branch": {
+            "name": report.branch.name,
+            "created": report.branch.created,
+            "start_point": report.branch.start_point,
+            "warning": report.branch.warning,
+        } if report.branch else None,
         "implement": report.implement,
         "claude": {
             "output": claude.output,

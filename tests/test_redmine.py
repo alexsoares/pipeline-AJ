@@ -139,3 +139,74 @@ def test_redmine_configured(monkeypatch):
     monkeypatch.setenv("REDMINE_API_KEY", "k")
     assert not redmine_configured(RedmineSettings())
     assert redmine_configured(RedmineSettings(url="https://r"))
+
+
+# --- Status e horas ------------------------------------------------------------------------------
+
+STATUSES = {"issue_statuses": [{"id": 1, "name": "Analisar"}, {"id": 4, "name": "Homologar"}]}
+ACTIVITIES = {"time_entry_activities": [{"id": 9, "name": "Codificação"}, {"id": 20, "name": "Análise"}]}
+
+
+def routed_client(routes, calls):
+    def handler(request):
+        calls.append(request)
+        key = (request.method, request.url.path)
+        status, body = routes[key] if not callable(routes[key]) else routes[key](request)
+        return httpx.Response(status, json=body) if body is not None else httpx.Response(status)
+
+    return RedmineClient(RedmineSettings(), transport=httpx.MockTransport(handler))
+
+
+def issue_with_status(name):
+    body = json.loads(json.dumps(ISSUE_JSON))
+    body["issue"]["status"] = {"name": name}
+    return body
+
+
+def test_nota_e_status_numa_unica_atualizacao(redmine_env):
+    calls = []
+    client = routed_client({
+        ("GET", "/issue_statuses.json"): (200, STATUSES),
+        ("PUT", "/issues/1425.json"): (204, None),
+        ("GET", "/issues/1425.json"): (200, issue_with_status("Homologar")),
+    }, calls)
+
+    url, current = client.update_issue("1425", notes="texto", status="homologar")
+
+    assert (url, current) == ("https://redmine.exemplo/issues/1425", "Homologar")
+    put = next(c for c in calls if c.method == "PUT")
+    assert json.loads(put.content) == {"issue": {"notes": "texto", "status_id": 4}}
+
+
+def test_status_devolve_o_status_real_da_tarefa(redmine_env):
+    client = routed_client({
+        ("GET", "/issue_statuses.json"): (200, STATUSES),
+        ("PUT", "/issues/1425.json"): (204, None),
+        ("GET", "/issues/1425.json"): (200, issue_with_status("Analisar")),  # fluxo de trabalho barrou
+    }, [])
+    assert client.update_issue("1425", status="Homologar")[1] == "Analisar"
+
+
+def test_status_inexistente(redmine_env):
+    client = routed_client({("GET", "/issue_statuses.json"): (200, STATUSES)}, [])
+    with pytest.raises(RedmineError, match="Status 'Pronto' não existe no Redmine. Opções: Analisar, Homologar"):
+        client.update_issue("1425", status="Pronto")
+
+
+def test_lanca_horas(redmine_env):
+    calls = []
+    client = routed_client({
+        ("GET", "/enumerations/time_entry_activities.json"): (200, ACTIVITIES),
+        ("POST", "/time_entries.json"): (201, {"time_entry": {"id": 1}}),
+    }, calls)
+
+    client.log_time("1425", 1.5, "análise", comments="x" * 300)
+
+    body = json.loads(calls[-1].content)["time_entry"]
+    assert body == {"issue_id": 1425, "hours": 1.5, "activity_id": 20, "comments": "x" * 255}
+
+
+def test_atividade_inexistente(redmine_env):
+    client = routed_client({("GET", "/enumerations/time_entry_activities.json"): (200, ACTIVITIES)}, [])
+    with pytest.raises(RedmineError, match="Atividade 'Dormir' não existe"):
+        client.log_time("1425", 1, "Dormir")

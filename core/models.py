@@ -53,6 +53,8 @@ class BranchResult:
     name: str
     created: bool
     switched: bool
+    start_point: str | None = None  # de onde o branch foi criado (ex.: origin/main)
+    warning: str | None = None  # ex.: fetch falhou e a base local foi usada
 
 
 @dataclass(frozen=True)

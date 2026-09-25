@@ -22,7 +22,8 @@ from typing import Any
 
 from flask import Flask, jsonify, request, send_from_directory
 
-from core.conclusion import ConclusionReport, conclude, conclusion_to_dict
+from core.conclusion import ConclusionOptions, ConclusionReport, conclude, conclusion_to_dict
+from core.history import History
 from core.exceptions import GitError, MissingInputError, PipelineCancelled, PipelineError
 from core.git_manager import GitManager
 from core.logging_config import setup_logging
@@ -30,10 +31,14 @@ from core.models import PipelineInput
 from core.pipeline import MISSING_REQUEST, STEPS, Pipeline, StepFailed, report_to_dict
 from core.settings import Settings, load_settings
 from core.validator import validate_input
+from integration.gitlab import gitlab_configured
 from integration.redmine import redmine_configured
 
 logger = logging.getLogger(__name__)
 STATIC_DIR = Path(__file__).resolve().parent / "static"
+
+
+PROGRESS_KEPT = 200
 
 
 class PipelineBusyError(Exception):
@@ -50,6 +55,7 @@ class Job:
     status: str = "running"  # running | succeeded | failed | cancelled
     cancel_requested: bool = False
     steps: dict[int, str] = field(default_factory=dict)
+    progress: list[str] = field(default_factory=list)  # frases do Claude Code, as mais recentes no fim
     failed_step: int | None = None
     error: str | None = None
     result: dict[str, Any] | None = None
@@ -65,6 +71,7 @@ class Job:
             "status": self.status,
             "cancel_requested": self.cancel_requested,
             "steps": {str(n): state for n, state in self.steps.items()},
+            "progress": self.progress[-PROGRESS_KEPT:],
             "failed_step": self.failed_step,
             "error": self.error,
             "result": self.result,
@@ -74,6 +81,7 @@ class Job:
 class JobManager:
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
+        self.history = History.from_settings(settings.history)
         self._jobs: dict[str, Job] = {}
         self._lock = threading.Lock()
         self._active: dict[Path, str] = {}  # raiz do repositório -> id da execução
@@ -101,7 +109,11 @@ class JobManager:
             def on_step(number: int, state: str) -> None:
                 job.steps[number] = state
 
-            job.pipeline = Pipeline(self.settings, on_step=on_step)
+            def on_progress(message: str) -> None:
+                job.progress.append(message)
+                del job.progress[:-PROGRESS_KEPT]
+
+            job.pipeline = Pipeline(self.settings, on_step=on_step, on_progress=on_progress, history=self.history)
             self._jobs[job.id] = job
             self._active[key] = job.id
 
@@ -112,7 +124,7 @@ class JobManager:
         return self._jobs.get(job_id)
 
     def conclude(
-        self, data: PipelineInput, commit: bool, claude_output: str = "", redmine: bool = False
+        self, data: PipelineInput, options: ConclusionOptions, claude_output: str = ""
     ) -> ConclusionReport:
         """Conclui o card na hora (é rápido), ocupando o repositório para nenhuma execução trocar de branch no meio."""
         key = self._repo_key(data.repo_path)
@@ -122,8 +134,8 @@ class JobManager:
             self._active[key] = "conclusão"
         try:
             return conclude(
-                self.settings, data.repo_path, data.card_number, data.request,
-                commit=commit, claude_output=claude_output, redmine=redmine,
+                self.settings, data.repo_path, data.card_number, data.request, options,
+                claude_output=claude_output, history=self.history,
             )
         finally:
             with self._lock:
@@ -159,6 +171,29 @@ class JobManager:
                 self._active.pop(key, None)
 
 
+def _conclusion_options(body: dict[str, Any]) -> ConclusionOptions:
+    """Opções da conclusão vindas do JSON; só `true` liga uma opção."""
+    hours = body.get("hours")
+    if hours in (None, "", 0):
+        hours = None
+    else:
+        try:
+            hours = float(hours)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("Horas inválidas: informe um número (ex.: 1.5).") from exc
+        if hours <= 0:
+            raise ValueError("Horas devem ser maiores que zero.")
+    status = str(body.get("status") or "").strip() or None
+    return ConclusionOptions(
+        commit=body.get("commit") is True,
+        merge_request=body.get("merge_request") is True,
+        redmine_note=body.get("redmine") is True,
+        redmine_status=status,
+        hours=hours,
+        activity=str(body.get("activity") or "").strip() or None,
+    )
+
+
 def create_app(settings: Settings | None = None) -> Flask:
     settings = settings or load_settings()
     jobs = JobManager(settings)
@@ -170,7 +205,25 @@ def create_app(settings: Settings | None = None) -> Flask:
 
     @app.get("/api/config")
     def config():
-        return jsonify({"redmine": redmine_configured(settings.redmine)})
+        return jsonify({
+            "redmine": redmine_configured(settings.redmine),
+            "gitlab": gitlab_configured(settings.gitlab),
+            "merge_request_default": settings.gitlab.merge_request_default,
+            "conclusion_status": settings.redmine.conclusion_status,
+            "time_entry_activity": settings.redmine.time_entry_activity,
+        })
+
+    @app.get("/api/history")
+    def history():
+        if not jobs.history:
+            return jsonify({"enabled": False, "items": [], "summary": []})
+        limit = min(max(request.args.get("limit", default=50, type=int) or 50, 1), 500)
+        card = (request.args.get("card") or "").strip().lstrip("#") or None
+        return jsonify({
+            "enabled": True,
+            "items": jobs.history.recent(limit, card=card),
+            "summary": [] if card else jobs.history.monthly_summary(),
+        })
 
     @app.get("/api/steps")
     def steps():
@@ -210,16 +263,16 @@ def create_app(settings: Settings | None = None) -> Flask:
         except MissingInputError as exc:
             return jsonify({"error": str(exc)}), 400
 
+        try:
+            options = _conclusion_options(body)
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
+
         # Se vier de uma execução com implementação, o resumo do Claude Code entra no documento do card.
         job = jobs.get(str(body.get("job_id") or ""))
         claude = (job.result or {}).get("claude") if job else None
         try:
-            report = jobs.conclude(
-                data,
-                commit=body.get("commit") is True,
-                claude_output=(claude or {}).get("output", ""),
-                redmine=body.get("redmine") is True,
-            )
+            report = jobs.conclude(data, options, claude_output=(claude or {}).get("output", ""))
         except PipelineBusyError:
             return jsonify({"error": "Há uma execução em andamento neste repositório. Aguarde ou cancele."}), 409
         except PipelineError as exc:

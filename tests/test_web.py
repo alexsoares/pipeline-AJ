@@ -150,15 +150,18 @@ def test_conclusao_com_redmine_pela_web(client_for, repo, monkeypatch):
     res = client.post("/api/conclusions", json={"repo": str(repo), "card": "7", "redmine": True})
     assert res.status_code == 200  # documento gerado; a falha do Redmine vem no corpo
     data = res.get_json()
-    assert data["redmine_requested"] is True
+    assert data["requested"]["redmine_note"] is True
     assert data["redmine_url"] is None
-    assert "Redmine não configurado" in data["redmine_error"]
+    assert "Redmine não configurado" in data["errors"][0]
 
 
-def test_config_informa_se_o_redmine_esta_configurado(client_for, redmine_env, monkeypatch):
-    assert client_for().get("/api/config").get_json() == {"redmine": True}
+def test_config(client_for, redmine_env, monkeypatch):
+    assert client_for().get("/api/config").get_json() == {
+        "redmine": True, "gitlab": False, "merge_request_default": False,
+        "conclusion_status": "Homologar", "time_entry_activity": "Codificação",
+    }
     monkeypatch.delenv("REDMINE_API_KEY")
-    assert client_for().get("/api/config").get_json() == {"redmine": False}
+    assert client_for().get("/api/config").get_json()["redmine"] is False
 
 
 def test_sem_descricao_e_sem_redmine(client_for, repo):
@@ -178,3 +181,41 @@ def test_sem_descricao_com_redmine(client_for, repo, redmine_env, monkeypatch):
     assert job["steps"]["2"] == "done"
     assert job["result"]["issue"]["subject"] == "Adicionar health check"
     assert job["result"]["classification_source"] == "redmine"
+
+
+@pytest.mark.parametrize(
+    ("body", "error"),
+    [({"hours": "abc"}, "Horas inválidas"), ({"hours": -1}, "maiores que zero")],
+)
+def test_conclusao_com_horas_invalidas(client_for, repo, body, error):
+    res = client_for().post("/api/conclusions", json={"repo": str(repo), "card": "7", **body})
+    assert res.status_code == 400
+    assert error in res.get_json()["error"]
+
+
+def test_conclusao_repassa_as_opcoes(client_for, repo, monkeypatch):
+    from web import app as app_module
+
+    captured = {}
+
+    def fake_conclude(settings, repo_path, card, request, options, **kwargs):
+        captured["options"] = options
+        raise app_module.PipelineError("parar aqui")
+
+    monkeypatch.setattr(app_module, "conclude", fake_conclude)
+    res = client_for().post("/api/conclusions", json={
+        "repo": str(repo), "card": "7", "commit": True, "merge_request": True, "redmine": "sim",
+        "status": " Homologar ", "hours": "2.5", "activity": "Análise",
+    })
+    assert res.status_code == 422
+    options = captured["options"]
+    assert (options.commit, options.merge_request, options.redmine_note) == (True, True, False)
+    assert (options.redmine_status, options.hours, options.activity) == ("Homologar", 2.5, "Análise")
+
+
+def test_progresso_do_claude_code_no_job(client_for, repo, fake_claude):
+    event = {"type": "assistant", "message": {"content": [{"type": "tool_use", "name": "Write",
+                                                         "input": {"file_path": str(repo / "novo.txt")}}]}}
+    client = client_for(fake_claude(events=[event]))
+    job = wait(client, post(client, repo, implement=True).get_json()["id"])
+    assert job["progress"] == ["Criando novo.txt"]

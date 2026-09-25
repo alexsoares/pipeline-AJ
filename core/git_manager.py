@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import subprocess
 from pathlib import Path
 
@@ -17,7 +18,9 @@ class GitManager:
         self.repo_path = repo_path
         self.timeout_seconds = timeout_seconds
 
-    def _run(self, *args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
+    def _run(
+        self, *args: str, check: bool = True, timeout: int | None = None, env: dict[str, str] | None = None
+    ) -> subprocess.CompletedProcess[str]:
         cmd = ["git", *args]
         logger.debug("Executando: %s (cwd=%s)", " ".join(cmd), self.repo_path)
         try:
@@ -26,7 +29,8 @@ class GitManager:
                 cwd=self.repo_path,
                 capture_output=True,
                 text=True,
-                timeout=self.timeout_seconds,
+                timeout=timeout or self.timeout_seconds,
+                env={**os.environ, **env} if env else None,
             )
         except FileNotFoundError as exc:
             raise GitError("Git não encontrado no PATH.") from exc
@@ -66,10 +70,53 @@ class GitManager:
     # --- Passo 3 -----------------------------------------------------------
 
     def branch_exists(self, name: str) -> bool:
-        return self._run("rev-parse", "--verify", "--quiet", f"refs/heads/{name}", check=False).returncode == 0
+        return self.ref_exists(f"refs/heads/{name}")
 
-    def ensure_work_branch(self, name: str, protected: tuple[str, ...]) -> BranchResult:
-        """Cria/usa `name` somente se o branch atual for protegido (main/master)."""
+    def ref_exists(self, ref: str) -> bool:
+        return self._run("rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}", check=False).returncode == 0
+
+    def has_remote(self, remote: str) -> bool:
+        return remote in self._run("remote").stdout.split()
+
+    def fetch(self, remote: str, branch: str, timeout: int) -> None:
+        self._run("fetch", "--quiet", remote, branch, timeout=timeout)
+
+    def resolve_start_point(
+        self, base: str, remote: str, fetch: bool, timeout: int
+    ) -> tuple[str, str | None]:
+        """Ponto de partida do branch do card: (<remote>/<base> ou <base>, aviso ou None)."""
+        warning = None
+        fetched = False
+        if fetch and self.has_remote(remote):
+            try:
+                self.fetch(remote, base, timeout)
+                fetched = True
+            except GitError as exc:
+                warning = f"Não foi possível atualizar '{base}' a partir de '{remote}' ({exc}); usada a base local."
+                logger.warning(warning)
+        remote_ref = f"refs/remotes/{remote}/{base}"
+        # Recém-buscada, a base remota é a mais atual. Sem fetch, a local pode estar à frente (commits não enviados).
+        if fetched and self.ref_exists(remote_ref):
+            return f"{remote}/{base}", None
+        if self.branch_exists(base):
+            return base, warning
+        if self.ref_exists(remote_ref):
+            return f"{remote}/{base}", warning
+        raise GitError(f"Branch base '{base}' não existe (nem local nem em '{remote}').")
+
+    def ensure_work_branch(
+        self,
+        name: str,
+        protected: tuple[str, ...],
+        base: str | None = None,
+        remote: str = "origin",
+        fetch: bool = False,
+        network_timeout: int = 120,
+    ) -> BranchResult:
+        """Cria/usa `name` somente se o branch atual for protegido (main/master).
+
+        O branch novo sai de `base` (padrão: o branch protegido atual), atualizado do remoto quando `fetch`.
+        """
         current = self.current_branch()
         if current not in protected:
             logger.info("Branch atual '%s' não é protegido; mantendo.", current)
@@ -83,18 +130,20 @@ class GitManager:
             self._run("checkout", name)
             return BranchResult(name=name, created=False, switched=True)
 
-        self._run("checkout", "-b", name)
-        logger.info("Branch '%s' criado a partir de '%s'.", name, current)
-        return BranchResult(name=name, created=True, switched=True)
+        start_point, warning = self.resolve_start_point(base or current, remote, fetch, network_timeout)
+        # --no-track: o branch do card não deve ficar configurado para enviar à base.
+        self._run("checkout", "--no-track", "-b", name, start_point)
+        logger.info("Branch '%s' criado a partir de '%s'.", name, start_point)
+        return BranchResult(name=name, created=True, switched=True, start_point=start_point, warning=warning)
 
     # --- Conclusão do card --------------------------------------------------
 
-    def base_commit(self, protected: tuple[str, ...]) -> tuple[str, str]:
-        """Ponto em que o branch atual saiu do primeiro branch protegido existente: (nome do protegido, commit)."""
-        for name in protected:
-            if self.branch_exists(name):
-                return name, self._run("merge-base", "HEAD", name).stdout.strip()
-        raise GitError(f"Nenhum branch base encontrado ({', '.join(protected)}) para comparar as alterações do card.")
+    def base_commit(self, candidates: list[str]) -> tuple[str, str]:
+        """Ponto em que o branch atual saiu da primeira base existente em `candidates`: (base, commit)."""
+        for ref in candidates:
+            if self.ref_exists(ref):
+                return ref, self._run("merge-base", "HEAD", ref).stdout.strip()
+        raise GitError(f"Nenhum branch base encontrado ({', '.join(candidates)}) para comparar as alterações do card.")
 
     def changes_since(self, base: str) -> list[str]:
         """Alterações desde `base` (commitadas ou não) em formato name-status, mais os arquivos não rastreados."""
@@ -104,6 +153,18 @@ class GitManager:
 
     def diff_stat(self, base: str = "HEAD") -> str:
         return self._run("diff", "--stat", base, check=False).stdout.strip()
+
+    def remote_url(self, remote: str) -> str:
+        return self._run("remote", "get-url", remote).stdout.strip()
+
+    def commits_ahead(self, base: str) -> int:
+        return int(self._run("rev-list", "--count", f"{base}..HEAD").stdout.strip() or 0)
+
+    def push(self, remote: str, branch: str, timeout: int) -> None:
+        # Sem terminal (web): falta de credencial deve falhar na hora, não esperar senha até o timeout.
+        self._run(
+            "push", "--quiet", "--set-upstream", remote, branch, timeout=timeout, env={"GIT_TERMINAL_PROMPT": "0"}
+        )
 
     def commit_all(self, message: str) -> str | None:
         """Faz `git add -A` e commit. Retorna o hash curto, ou None se não houver nada para commitar."""

@@ -7,7 +7,7 @@ import pytest
 
 from core.exceptions import ClaudeExecutionError, PipelineCancelled
 from core.settings import ClaudeCodeSettings
-from integration.claude_runner import ClaudeCodeRunner
+from integration.claude_runner import ClaudeCodeRunner, describe_event
 
 
 def run(runner, repo):
@@ -50,7 +50,8 @@ def test_monta_comando(repo, fake_claude):
     prompt = args[args.index("-p") + 1]
     assert "#1425 (feature)" in prompt and "Adicionar health check" in prompt
     assert "Não faça commit" in prompt
-    assert args[args.index("--output-format") + 1] == "json"
+    assert args[args.index("--output-format") + 1] == "stream-json"
+    assert "--verbose" in args
     assert args[args.index("--permission-mode") + 1] == "acceptEdits"
     assert args[args.index("--model") + 1] == "opus"
     assert "--strict-mcp-config" in args
@@ -119,3 +120,72 @@ def test_cancelar_antes_de_iniciar(repo, fake_claude):
     with pytest.raises(PipelineCancelled):
         run(runner, repo)
     assert not (repo / "novo.txt").exists()
+
+
+
+# --- Progresso (stream-json) ---------------------------------------------------------------------
+
+
+def assistant(*content):
+    return {"type": "assistant", "message": {"content": list(content)}}
+
+
+def tool(name, **args):
+    return {"type": "tool_use", "name": name, "input": args}
+
+
+def test_descreve_eventos(tmp_path):
+    events = [
+        {"type": "system", "subtype": "init", "model": "claude-sonnet-5"},
+        assistant({"type": "text", "text": "Vou  ler o\nvalidador."}, tool("Read", file_path=str(tmp_path / "core/v.py"))),
+        assistant(tool("Edit", file_path="/fora/do/repo.py"), tool("Write", file_path=str(tmp_path / "n.py"))),
+        assistant(tool("Bash", command="python -m pytest -q"), tool("Grep", pattern="def main"), tool("TodoWrite")),
+        assistant(tool("WebFetch", url="x")),
+        {"type": "user", "message": {"content": [{"type": "tool_result"}]}},
+    ]
+    described = [line for event in events for line in describe_event(event, tmp_path)]
+    assert described == [
+        "Claude Code iniciado (claude-sonnet-5)",
+        "💬 Vou ler o validador.",
+        "Lendo core/v.py",
+        "Editando /fora/do/repo.py",
+        "Criando n.py",
+        "Executando: python -m pytest -q",
+        "Buscando def main",
+        "Atualizando o plano de trabalho",
+        "Usando WebFetch",
+    ]
+
+
+def test_texto_longo_e_resumido(tmp_path):
+    [line] = describe_event(assistant({"type": "text", "text": "x" * 500}), tmp_path)
+    assert len(line) == 2 + 140 and line.endswith("…")
+
+
+def test_progresso_chega_durante_a_execucao(repo, fake_claude):
+    binary = fake_claude(events=[assistant(tool("Edit", file_path=str(repo / "a.py")))], sleep=2)
+    received = []
+    started = time.monotonic()
+
+    run_result = ClaudeCodeRunner(ClaudeCodeSettings(binary=str(binary))).run(
+        repo, "1", "feature", "x", on_progress=lambda m: received.append((m, time.monotonic() - started))
+    )
+
+    assert run_result.output == "Arquivo criado."
+    assert [m for m, _ in received] == ["Editando a.py"]
+    assert received[0][1] < 1.5, "o progresso deve chegar antes do fim (o processo leva 2 s)"
+
+
+def test_callback_de_progresso_com_erro_nao_derruba(repo, fake_claude):
+    binary = fake_claude(events=[assistant(tool("Read", file_path="x"))])
+
+    def broken(message):
+        raise RuntimeError("falhou")
+
+    assert ClaudeCodeRunner(ClaudeCodeSettings(binary=str(binary))).run(repo, "1", "f", "x", on_progress=broken)
+
+
+def test_sem_evento_result(repo, fake_claude):
+    binary = fake_claude(stdout=json.dumps({"type": "assistant", "message": {"content": []}}))
+    with pytest.raises(ClaudeExecutionError, match=r"Saída inesperada do Claude Code \(exit 0\): \(sem saída\)"):
+        run(ClaudeCodeRunner(ClaudeCodeSettings(binary=str(binary))), repo)

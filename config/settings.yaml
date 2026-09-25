@@ -5,6 +5,18 @@
 git:
   protected_branches: [main, master]
   command_timeout_seconds: 30
+  remote: origin
+  # Antes de criar o branch do card, busca a base no remoto (git fetch) e cria a partir de <remote>/<base>.
+  # Sem rede, usa a base local e avisa no relatório.
+  fetch: true
+  network_timeout_seconds: 120   # fetch e push
+  # Base de cada classificação. Vazio = o branch protegido em que o repositório está (main/master).
+  # Exemplo git-flow:
+  #   base_branches:
+  #     feature: develop
+  #     hotfix: main
+  #     release: develop
+  base_branches: {}
 
 classifier:
   model: claude-haiku-4-5
@@ -40,6 +52,23 @@ redmine:
     GMUD-Software: release
   custom_fields:
     - critérios de aceitação
+  # Na conclusão, o usuário escolhe se muda o status da tarefa e se lança horas.
+  conclusion_status: Homologar     # status sugerido (nomes em Administração → Situações das tarefas)
+  time_entry_activity: Codificação # atividade padrão do lançamento de horas
+
+gitlab:
+  # Merge request do card no GitLab (Ginner), aberto na conclusão se o usuário escolher.
+  # URL aqui ou em GITLAB_URL (.env, tem precedência); o token (escopo "api") só em GITLAB_TOKEN.
+  url: null
+  timeout_seconds: 30
+  verify_ssl: true
+  merge_request_default: false     # opção "abrir merge request" já vem marcada?
+  remove_source_branch: false      # MR marcado para apagar o branch do card após o merge
+
+history:
+  # Histórico das execuções e conclusões (tokens, custo, resultado) em SQLite. Consulta: --historico ou a web.
+  enabled: true
+  path: data/history.db
 
 logging:
   level: INFO

@@ -20,6 +20,11 @@ DOTENV_PATH = PROJECT_ROOT / ".env"
 class GitSettings:
     protected_branches: tuple[str, ...] = ("main", "master")
     command_timeout_seconds: int = 30
+    remote: str = "origin"
+    fetch: bool = True  # atualiza a base (git fetch) antes de criar o branch do card
+    network_timeout_seconds: int = 120  # fetch e push
+    # Classificação -> branch base (ex.: feature: develop). Vazio = o branch protegido atual.
+    base_branches: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -63,6 +68,24 @@ class RedmineSettings:
     tracker_classification: dict[str, str] = field(default_factory=_default_tracker_classification)
     # Campos personalizados da tarefa que entram na solicitação (nome exato, sem diferenciar maiúsculas).
     custom_fields: tuple[str, ...] = ("critérios de aceitação",)
+    # Status sugerido ao concluir o card e atividade padrão do lançamento de horas (nomes como no Redmine).
+    conclusion_status: str = "Homologar"
+    time_entry_activity: str = "Codificação"
+
+
+@dataclass(frozen=True)
+class GitLabSettings:
+    url: str | None = None  # a variável GITLAB_URL tem precedência; o token vem só de GITLAB_TOKEN
+    timeout_seconds: int = 30
+    verify_ssl: bool = True
+    merge_request_default: bool = False  # valor inicial da opção "abrir merge request" (CLI e web)
+    remove_source_branch: bool = False  # marca "apagar o branch do card após o merge" no MR
+
+
+@dataclass(frozen=True)
+class HistorySettings:
+    enabled: bool = True
+    path: str = "data/history.db"  # relativo à raiz do projeto
 
 
 @dataclass(frozen=True)
@@ -78,6 +101,8 @@ class Settings:
     claude_code: ClaudeCodeSettings = field(default_factory=ClaudeCodeSettings)
     documentation: DocumentationSettings = field(default_factory=DocumentationSettings)
     redmine: RedmineSettings = field(default_factory=RedmineSettings)
+    gitlab: GitLabSettings = field(default_factory=GitLabSettings)
+    history: HistorySettings = field(default_factory=HistorySettings)
     logging: LoggingSettings = field(default_factory=LoggingSettings)
 
 

@@ -138,7 +138,7 @@ def test_callback_com_erro_nao_derruba_a_pipeline(repo, settings_for, fake_class
 def test_relatorio_texto_sem_implementacao(repo, settings_for, fake_classifier):
     text = format_report(make_pipeline(settings_for(), fake_classifier)[0].run(data_for(repo)))
     assert "Card 1425" in text
-    assert "feature/card-1425 (criado)" in text
+    assert "feature/card-1425 (criado a partir de main)" in text
     assert "Abra o Claude Code" in text
     assert "Resumo do Claude Code" not in text
 
@@ -158,7 +158,7 @@ def test_relatorio_json(repo, settings_for, fake_claude, fake_classifier):
 
     assert data["implement"] is True
     assert data["classification"] == "feature"
-    assert data["branch"] == {"name": "feature/card-1425", "created": True}
+    assert data["branch"] == {"name": "feature/card-1425", "created": True, "start_point": "main", "warning": None}
     assert data["claude"] == {"output": "Arquivo criado.", "duration_seconds": 1.5, "cost_usd": 0.02}
     assert data["changed_files"] == ["?? novo.txt"]
     assert data["tokens"]["classifier"]["total"] == 101
@@ -245,3 +245,16 @@ def test_relatorios_com_tarefa(repo, settings_for, fake_classifier, redmine_env)
     assert data["issue"]["tracker"] == "Evolução"
     assert data["classification_source"] == "redmine"
     assert data["request"] == make_issue().as_request()
+
+
+def test_branch_sai_da_base_configurada_para_a_classificacao(remote_setup, settings_for, fake_classifier):
+    local, _, push = remote_setup
+    push("develop", "da-develop.txt")
+    settings = settings_for()
+    settings = replace(settings, git=replace(settings.git, base_branches={"feature": "develop"}))
+
+    report = make_pipeline(settings, fake_classifier)[0].run(data_for(local))
+
+    assert report.branch.start_point == "origin/develop"
+    assert (local / "da-develop.txt").exists()
+    assert "feature/card-1425 (criado a partir de origin/develop)" in format_report(report)
