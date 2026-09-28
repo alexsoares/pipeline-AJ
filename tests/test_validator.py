@@ -33,6 +33,13 @@ def test_argumentos_explicitos_tem_precedencia(repo, make_repo):
     assert data.card_number == "2"
 
 
+def test_descricao_preservada_com_argumentos_explicitos(repo):
+    texto = "Documente na seção 'Card 194621', como na tarefa 195346, o path: /x"
+    data = validate_input(texto, repo=str(repo), card="194621")
+    assert data.card_number == "194621"
+    assert data.request == texto
+
+
 def test_card_com_cerquilha(repo):
     assert validate_input("tarefa", repo=str(repo), card="#77").card_number == "77"
 

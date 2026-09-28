@@ -63,6 +63,18 @@ def test_sem_modelo_nao_passa_flag(repo, fake_claude):
     assert "--model" not in args_of(binary)
 
 
+def test_nao_repassa_chave_da_api(repo, fake_claude, monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-do-classificador")
+    monkeypatch.setenv("ANTHROPIC_OUTRA", "fica")
+    binary = fake_claude()
+    run(ClaudeCodeRunner(ClaudeCodeSettings(binary=str(binary))), repo)
+
+    env = json.loads(binary.with_name(binary.name + ".env.json").read_text())
+    assert "ANTHROPIC_API_KEY" not in env, "o Claude Code deve usar o login do usuário, não a chave da API"
+    assert env["ANTHROPIC_OUTRA"] == "fica"
+    assert os.environ["ANTHROPIC_API_KEY"] == "sk-ant-do-classificador", "o classificador continua com a chave"
+
+
 def test_binario_inexistente(repo):
     with pytest.raises(ClaudeExecutionError, match="não encontrado"):
         run(ClaudeCodeRunner(ClaudeCodeSettings(binary="nao-existe-claude")), repo)

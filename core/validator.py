@@ -47,8 +47,13 @@ def validate_input(
     """
     request = (message or "").strip()
 
-    repo_from_msg, request = _extract(_REPO_PATTERN, request)
-    card_from_msg, request = _extract(_CARD_PATTERN, request)
+    # Só procura repo/card na mensagem quando não vierem por parâmetro: senão, uma menção como "a seção Card 12"
+    # ou "igual à tarefa 34" seria recortada da descrição.
+    repo_from_msg = card_from_msg = None
+    if not repo:
+        repo_from_msg, request = _extract(_REPO_PATTERN, request)
+    if not card:
+        card_from_msg, request = _extract(_CARD_PATTERN, request)
     repo = (repo or repo_from_msg or "").strip()
     card = (card or card_from_msg or "").strip().lstrip("#")
 
