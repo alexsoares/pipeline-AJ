@@ -110,7 +110,7 @@ DEFAULT_PAYLOAD = {
 def fake_claude(tmp_path):
     """Gera um executável que imita `claude -p --output-format stream-json`.
 
-    Registra os argumentos recebidos em `<binário>.args.json`, imprime `events` (um JSON por linha), cria `touch`
+    Registra os argumentos recebidos em `<binário>.args.json` e o ambiente em `<binário>.env.json`, imprime `events` (um JSON por linha), cria `touch`
     no cwd (o repositório), espera `sleep` segundos (com um processo filho, como um comando do Claude Code) e
     imprime `stdout` (por padrão, o evento final `result`).
     """
@@ -131,8 +131,9 @@ def fake_claude(tmp_path):
         binary.write_text(
             textwrap.dedent(f"""\
                 #!{sys.executable}
-                import json, pathlib, subprocess, sys
+                import json, os, pathlib, subprocess, sys
                 pathlib.Path({str(binary) + ".args.json"!r}).write_text(json.dumps(sys.argv[1:]))
+                pathlib.Path({str(binary) + ".env.json"!r}).write_text(json.dumps(dict(os.environ)))
                 sys.stdout.write({before!r})
                 sys.stdout.flush()
                 if {touch!r}:

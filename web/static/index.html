@@ -97,24 +97,49 @@
     padding: 14px 16px;
     margin-bottom: 24px;
   }
-  .steps { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
-  .steps li { display: flex; align-items: center; gap: 10px; color: var(--muted); font-size: 14px; }
-  .steps .dot {
-    width: 20px; height: 20px; border-radius: 50%;
+  /* Etapas em cards de estágio, ligados por conectores (estilo pipeline de CI). */
+  .steps {
+    list-style: none; margin: 0; padding: 0;
+    display: grid; grid-template-columns: repeat(var(--stages, 6), minmax(0, 1fr)); gap: 14px;
+  }
+  .stage {
+    position: relative;
+    background: var(--surface); border: 1px solid var(--border); border-top: 3px solid var(--border);
+    border-radius: 8px; padding: 9px 8px 8px;
+    display: flex; flex-direction: column; gap: 4px; min-height: 96px;
+    transition: border-color .2s, box-shadow .2s;
+  }
+  /* Conector até o próximo card (some na quebra de linha só visualmente; não afeta a leitura). */
+  .stage:not(:last-child)::after {
+    content: ""; position: absolute; top: 50%; right: -15px; width: 14px; height: 2px; background: var(--border);
+  }
+  .stage.done:not(:last-child)::after { background: var(--ok); }
+  .stage-head { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
+  .stage-n { font-size: 11px; font-weight: 600; letter-spacing: .05em; text-transform: uppercase; color: var(--muted); }
+  .stage-name { font-size: 12px; font-weight: 600; line-height: 1.3; color: var(--muted); flex: 1; overflow-wrap: break-word; }
+  .stage-foot { display: flex; justify-content: space-between; align-items: baseline; gap: 6px; font-size: 12px; color: var(--muted); white-space: nowrap; }
+  .stage-time { font-variant-numeric: tabular-nums; }
+  .stage .dot {
+    width: 18px; height: 18px; border-radius: 50%;
     border: 2px solid var(--border);
     display: grid; place-items: center;
-    font-size: 11px; font-weight: 700; flex: none;
+    font-size: 10px; font-weight: 700; flex: none;
   }
-  .steps li.running { color: var(--text); }
-  .steps li.running .dot { border-color: var(--run); border-top-color: transparent; animation: spin 0.9s linear infinite; }
-  .steps li.done { color: var(--text); }
-  .steps li.done .dot { background: var(--ok); border-color: var(--ok); color: var(--surface); }
-  .steps li.failed { color: var(--err); }
-  .steps li.failed .dot { background: var(--err); border-color: var(--err); color: var(--surface); }
-  .steps li.skipped { text-decoration: line-through; }
-  .steps li.cancelled .dot { background: var(--muted); border-color: var(--muted); color: var(--surface); }
+  .stage.running { border-top-color: var(--run); box-shadow: 0 0 0 1px var(--run) inset; }
+  .stage.running .stage-name, .stage.done .stage-name { color: var(--text); }
+  .stage.running .stage-status { color: var(--run); font-weight: 600; }
+  .stage.running .dot { border-color: var(--run); border-top-color: transparent; animation: spin 0.9s linear infinite; }
+  .stage.done { border-top-color: var(--ok); }
+  .stage.done .dot { background: var(--ok); border-color: var(--ok); color: var(--surface); }
+  .stage.done .stage-status { color: var(--ok); }
+  .stage.failed { border-top-color: var(--err); background: var(--err-bg); }
+  .stage.failed .stage-name, .stage.failed .stage-status { color: var(--err); }
+  .stage.failed .dot { background: var(--err); border-color: var(--err); color: var(--surface); }
+  .stage.skipped { border-style: dashed; border-top-style: solid; opacity: .7; }
+  .stage.cancelled { border-top-color: var(--muted); }
+  .stage.cancelled .dot { background: var(--muted); border-color: var(--muted); color: var(--surface); }
   @keyframes spin { to { transform: rotate(360deg); } }
-  @media (prefers-reduced-motion: reduce) { .steps li.running .dot { animation: none; border-top-color: var(--run); } }
+  @media (prefers-reduced-motion: reduce) { .stage.running .dot { animation: none; border-top-color: var(--run); } .stage { transition: none; } }
 
   .error {
     margin-top: 12px;
@@ -136,7 +161,7 @@
     overflow-wrap: anywhere;
   }
   .progress {
-    margin: 10px 0 0 30px;
+    margin: 10px 0 0;
     max-height: 220px;
     overflow-y: auto;
     background: var(--surface-2);
@@ -218,10 +243,80 @@
   .options label { font-size: 14px; color: var(--text); margin: 0; cursor: pointer; }
   .options .hint { margin: 0; }
 
+  /* --- Indicadores de desempenho: nível, pontos e marcos (derivados do histórico) --- */
+  .kpis {
+    display: grid; grid-template-columns: minmax(220px, 2fr) repeat(auto-fit, minmax(110px, 1fr)); gap: 1px;
+    margin-top: 12px; background: var(--border); border: 1px solid var(--border); border-radius: 8px; overflow: hidden;
+  }
+  .kpis[hidden] { display: none; }
+  .kpi { background: var(--surface); padding: 8px 12px; min-width: 0; }
+  .kpi .k { font-size: 11px; font-weight: 600; letter-spacing: .05em; text-transform: uppercase; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .kpi .v { font-size: 18px; font-weight: 650; font-variant-numeric: tabular-nums; line-height: 1.35; white-space: nowrap; }
+  .kpi .v small { font-size: 13px; font-weight: 500; color: var(--muted); margin-left: 4px; }
+  .levelbar { height: 4px; background: var(--surface-2); border-radius: 2px; overflow: hidden; margin: 4px 0 3px; }
+  .levelbar div { height: 100%; width: 0; background: var(--accent); transition: width .6s ease; }
+  .kpi .sub { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+  #achievements { margin-top: 8px; font-size: 13px; }
+  #achievements summary { cursor: pointer; color: var(--accent); width: fit-content; }
+  .badges { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 6px 16px; margin-top: 8px; }
+  .ach { display: flex; gap: 8px; align-items: baseline; padding: 4px 0; border-bottom: 1px solid var(--border); }
+  .ach .mark { width: 14px; flex: none; font-weight: 700; color: var(--ok); text-align: center; }
+  .ach.locked .mark { color: var(--muted); }
+  .ach .t { font-weight: 600; }
+  .ach .d { font-size: 12px; color: var(--muted); }
+  .ach.locked .t { color: var(--muted); font-weight: 500; }
+
+  .mission { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; font-size: 12px; color: var(--muted); }
+  .mission .lbl { font-weight: 600; letter-spacing: .05em; text-transform: uppercase; }
+  .mission .bar { flex: 1; height: 4px; background: var(--surface-2); border-radius: 2px; overflow: hidden; }
+  .mission .bar div { height: 100%; width: 0; background: var(--ok); transition: width .4s ease; }
+  .mission .count { font-variant-numeric: tabular-nums; }
+  .run.won { border-left: 3px solid var(--ok); }
+  .run.lost { border-left: 3px solid var(--err); }
+  .reward {
+    display: inline-block; margin-left: 8px; padding: 0 6px; border-radius: 4px;
+    background: var(--surface-2); color: var(--accent); font-weight: 600; font-size: 12px;
+    text-transform: none; letter-spacing: 0;
+  }
+
+  #toasts {
+    position: fixed; top: 12px; right: 12px; z-index: 10;
+    display: grid; gap: 8px; max-width: min(320px, calc(100vw - 24px));
+    pointer-events: none;
+  }
+  .toast {
+    background: var(--surface); color: var(--text);
+    border: 1px solid var(--border); border-left: 3px solid var(--accent);
+    border-radius: 6px; padding: 8px 12px; font-size: 13px;
+    box-shadow: 0 4px 14px rgb(0 0 0 / .12);
+    animation: toast-in .2s ease-out;
+  }
+  .toast b { display: block; font-weight: 600; }
+  .toast.out { opacity: 0; transition: opacity .3s ease; }
+  @keyframes toast-in { from { opacity: 0; transform: translateY(-6px); } }
+  @media (prefers-reduced-motion: reduce) {
+    .toast { animation: none; }
+    .levelbar div, .mission .bar div { transition: none; }
+  }
+
+  /* Em telas médias, 3 etapas por linha; o conector some no fim de cada linha. */
+  @media (max-width: 820px) {
+    .steps { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    .stage:nth-child(3n)::after { display: none; }
+  }
+
   @media (max-width: 560px) {
     .fields { grid-template-columns: 1fr; }
     .compose { flex-direction: column; align-items: stretch; }
     .user-msg { max-width: 92%; }
+    .steps { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .kpis { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    .kpis .kpi:first-child { grid-column: 1 / -1; }
+    .kpis .kpi:last-child { grid-column: span 2; }
+    .kpi { padding: 6px 10px; }
+    .kpi .v { font-size: 16px; }
+    .steps .stage::after { display: block; }
+    .steps .stage:nth-child(2n)::after { display: none; }
   }
 </style>
 </head>
@@ -230,12 +325,31 @@
   <div class="inner">
     <h1>Agente AJ</h1>
     <p>Descreva a tarefa do card. A pipeline classifica e prepara o branch; a implementação pode ser feita aqui, pelo Claude Code, ou depois, por você.</p>
+    <section class="kpis" id="player" aria-label="Indicadores" hidden>
+      <div class="kpi">
+        <div class="k">Nível</div>
+        <div class="v"><span data-p="level">1</span><small data-p="title"></small></div>
+        <div class="levelbar"><div data-p="bar"></div></div>
+        <div class="sub" data-p="xp"></div>
+      </div>
+      <div class="kpi" title="Pontos acumulados"><div class="k">Pontos</div><div class="v" data-p="points">0</div></div>
+      <div class="kpi" title="Cards concluídos"><div class="k">Concluídos</div><div class="v" data-p="done">0</div></div>
+      <div class="kpi" title="Execuções e conclusões bem-sucedidas (canceladas não contam)"><div class="k">Sucesso</div><div class="v" data-p="rate">-</div></div>
+      <div class="kpi" title="Dias seguidos com pelo menos uma entrega bem-sucedida"><div class="k">Sequência</div><div class="v" data-p="streak">0</div></div>
+      <div class="kpi" title="Marcos atingidos"><div class="k">Marcos</div><div class="v" data-p="ach">0</div></div>
+    </section>
+    <details id="achievements" hidden>
+      <summary>Marcos</summary>
+      <div class="badges"></div>
+    </details>
     <details id="history">
       <summary>Histórico</summary>
       <div class="history-body"><p class="note">Carregando…</p></div>
     </details>
   </div>
 </header>
+
+<div id="toasts" aria-live="polite"></div>
 
 <main id="transcript">
   <div class="inner" id="runs">
@@ -271,6 +385,7 @@
 <template id="run-tpl">
   <div class="user-msg"><small></small><span class="text"></span></div>
   <section class="run">
+    <div class="mission"><span class="lbl">Pipeline</span><div class="bar"><div></div></div><span class="count"></span></div>
     <ol class="steps"></ol>
     <pre class="progress" hidden></pre>
     <div class="run-actions"><button type="button" class="cancel">Cancelar</button></div>
@@ -383,14 +498,21 @@ function addRun(message, repo, card, implement) {
   $(".user-msg .text", frag).textContent = message || "(descrição da tarefa no Redmine)";
 
   const list = $(".steps", frag);
+  list.style.setProperty("--stages", steps.length);
   for (const s of steps) {
     const li = document.createElement("li");
     li.dataset.step = s.number;
-    li.innerHTML = `<span class="dot"></span><span class="name"></span>`;
-    $(".name", li).textContent = `${s.number}. ${s.name[0].toUpperCase()}${s.name.slice(1)}`;
+    li.className = "stage";
+    li.innerHTML = `<div class="stage-head"><span class="stage-n"></span><span class="dot"></span></div>
+      <div class="stage-name"></div>
+      <div class="stage-foot"><span class="stage-status"></span><span class="stage-time"></span></div>`;
+    $(".stage-n", li).textContent = `Etapa ${s.number}`;
+    $(".stage-name", li).textContent = `${s.name[0].toUpperCase()}${s.name.slice(1)}`;
+    $(".stage-status", li).textContent = STAGE_LABEL[""];
     list.append(li);
   }
   const section = $(".run", frag);
+  section.stageTimes = {};
   $("#runs").append(frag);
   scrollToEnd();
   return section;
@@ -401,12 +523,32 @@ function scrollToEnd() {
   t.scrollTop = t.scrollHeight;
 }
 
+const STAGE_LABEL = {
+  "": "Aguardando", running: "Em execução", done: "Concluída", failed: "Falhou", skipped: "Ignorada", cancelled: "Cancelada",
+};
+const fmtDuration = ms => {
+  const sec = Math.max(0, Math.round(ms / 1000));
+  return sec < 60 ? `${sec} s` : `${Math.floor(sec / 60)} min ${String(sec % 60).padStart(2, "0")} s`;
+};
+
 function renderSteps(section, job) {
+  // A API não informa a duração de cada etapa: ela é medida aqui, pelas mudanças de estado vistas no polling
+  // (precisão de ~1 s). Etapas que começam e terminam entre duas consultas aparecem sem tempo.
+  const now = Date.now(), times = section.stageTimes || (section.stageTimes = {});
   for (const li of section.querySelectorAll(".steps li")) {
-    const state = job.steps[li.dataset.step] || "";
-    li.className = state;
+    const n = li.dataset.step, state = job.steps[n] || "";
+    const t = times[n] || (times[n] = {});
+    if (state === "running" && !t.start) t.start = now;
+    if (state && state !== "running" && t.start && !t.end) t.end = now;
+    li.className = `stage ${state}`.trim();
     $(".dot", li).textContent = { done: "✓", failed: "✕", skipped: "–", cancelled: "■" }[state] || "";
+    $(".stage-status", li).textContent = STAGE_LABEL[state] ?? state;
+    $(".stage-time", li).textContent = t.start && state !== "skipped" ? fmtDuration((t.end || now) - t.start) : "";
   }
+  const total = section.querySelectorAll(".steps li").length;
+  const cleared = Object.values(job.steps).filter(st => st === "done" || st === "skipped").length;
+  $(".mission .bar div", section).style.width = `${total ? Math.round((cleared / total) * 100) : 0}%`;
+  $(".mission .count", section).textContent = `${cleared}/${total}`;
   const progress = $(".progress", section);
   if (job.progress && job.progress.length) {
     const atBottom = progress.scrollTop + progress.clientHeight >= progress.scrollHeight - 4;
@@ -557,6 +699,7 @@ function attachConclude(section, ctx) {
       errors.hidden = !r.errors.length;
       box.hidden = false;
       btn.textContent = "Concluir de novo";
+      refreshGame(true).then(g => showReward($(".conclude h3", section), g?.gained));
     } catch (err) {
       showError(section, `Não foi possível concluir o card: ${err.message}`);
       btn.textContent = "Concluir card";
@@ -585,7 +728,9 @@ async function poll(section, id, ctx) {
     if (job.status === "succeeded") { renderResult(section, job.result); attachConclude(section, ctx); }
     else if (job.status === "cancelled") Object.assign($(".notice", section), { textContent: job.error, hidden: false });
     else showError(section, job.error);
+    section.classList.add(job.status === "succeeded" ? "won" : job.status === "failed" ? "lost" : "ended");
     scrollToEnd();
+    if (job.status === "succeeded") refreshGame(true).then(r => showReward($(".mission", section), r?.gained));
     return;
   }
 }
@@ -671,8 +816,148 @@ async function loadHistory() {
 }
 $("#history").addEventListener("toggle", e => { if (e.target.open) loadHistory(); });
 
+// --- Indicadores de desempenho -----------------------------------------------------------------
+// Tudo é derivado do histórico (SQLite, via /api/history): nada fica só no navegador e nada é inventado.
+// Sem histórico configurado, o painel simplesmente não aparece.
+
+const XP_RULES = {
+  run: 10,          // execução da pipeline com sucesso
+  implement: 15,    // adicional: implementada pelo Claude Code
+  conclusion: 40,   // conclusão completa
+  partial: 20,      // conclusão com alguma integração falhando
+};
+const TITLES = ["Iniciante", "Praticante", "Proficiente", "Avançado", "Especialista", "Sênior", "Referência"];
+// Pontos acumulados para alcançar o nível n (1 → 0, 2 → 50, 3 → 150, 4 → 300…).
+const xpForLevel = n => 25 * n * (n - 1);
+
+const ACHIEVEMENTS = [
+  { id: "first-run", title: "Primeira execução", desc: "Uma execução da pipeline concluída com sucesso", test: s => s.runs >= 1 },
+  { id: "first-done", title: "Primeiro card concluído", desc: "Documento gerado e card fechado", test: s => s.done >= 1 },
+  { id: "implement", title: "Implementação assistida", desc: "Um card implementado pelo Claude Code", test: s => s.implemented >= 1 },
+  { id: "hotfix", title: "Primeiro hotfix", desc: "Um branch de hotfix preparado", test: s => s.hotfixes >= 1 },
+  { id: "release", title: "Primeira release", desc: "Um branch de release preparado", test: s => s.releases >= 1 },
+  { id: "flawless", title: "Consistência", desc: "5 execuções seguidas sem falha", test: s => s.bestRun >= 5 },
+  { id: "streak3", title: "Ritmo", desc: "3 dias consecutivos com entregas", test: s => s.bestStreak >= 3 },
+  { id: "streak7", title: "Constância", desc: "7 dias consecutivos com entregas", test: s => s.bestStreak >= 7 },
+  { id: "ten-done", title: "10 cards concluídos", desc: "Dez cards fechados pela pipeline", test: s => s.done >= 10 },
+  { id: "twentyfive-done", title: "25 cards concluídos", desc: "Vinte e cinco cards fechados pela pipeline", test: s => s.done >= 25 },
+];
+
+let game = null;  // último estado calculado, para detectar ganhos na sessão
+
+function dayKey(d) { return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`; }
+
+function computeGame(items) {
+  const s = { xp: 0, runs: 0, done: 0, implemented: 0, hotfixes: 0, releases: 0, attempts: 0, ok: 0, bestRun: 0, bestStreak: 0, streak: 0 };
+  const doneCards = new Map(), days = new Set();
+  let run = 0;
+  // Do mais antigo para o mais recente, para as sequências.
+  for (const i of [...items].reverse()) {
+    const ok = i.status === "succeeded";
+    if (i.status !== "cancelled") { s.attempts++; if (ok) s.ok++; }
+    if (i.kind === "pipeline") {
+      if (i.status === "failed") run = 0;
+      if (!ok) continue;
+      run++; s.bestRun = Math.max(s.bestRun, run);
+      s.runs++; s.xp += XP_RULES.run;
+      if (i.implement) { s.implemented++; s.xp += XP_RULES.implement; }
+      if (i.classification === "hotfix") s.hotfixes++;
+      if (i.classification === "release") s.releases++;
+    } else if (ok || i.status === "partial") {
+      // Cada card rende os pontos de conclusão uma vez só, pelo melhor resultado (concluir de novo não acumula).
+      const gain = ok ? XP_RULES.conclusion : XP_RULES.partial;
+      const had = doneCards.get(i.card) || 0;
+      if (gain > had) { s.xp += gain - had; doneCards.set(i.card, gain); }
+    } else continue;
+    days.add(i.started_at.slice(0, 10));
+  }
+  s.done = doneCards.size;
+  // Sequência de dias: a maior de todas e a atual (conta hoje ou ontem como ponta).
+  const sorted = [...days].sort();
+  let cur = 0, prev = null;
+  for (const d of sorted) {
+    const date = new Date(`${d}T12:00:00`);
+    cur = prev && (date - prev) / 86400000 < 1.5 ? cur + 1 : 1;
+    s.bestStreak = Math.max(s.bestStreak, cur);
+    prev = date;
+  }
+  const today = new Date(), yesterday = new Date(Date.now() - 86400000);
+  const last = sorted[sorted.length - 1];
+  s.streak = last === dayKey(today) || last === dayKey(yesterday) ? cur : 0;
+
+  let level = 1;
+  while (s.xp >= xpForLevel(level + 1)) level++;
+  s.level = level;
+  s.title = TITLES[Math.min(level - 1, TITLES.length - 1)];
+  s.floor = xpForLevel(level);
+  s.next = xpForLevel(level + 1);
+  s.unlocked = new Set(ACHIEVEMENTS.filter(a => a.test(s)).map(a => a.id));
+  return s;
+}
+
+function renderGame(s) {
+  const p = name => $(`[data-p="${name}"]`);
+  const pct = Math.round(((s.xp - s.floor) / (s.next - s.floor)) * 100);
+  p("level").textContent = s.level;
+  p("title").textContent = s.title;
+  p("bar").style.width = `${pct}%`;
+  p("xp").textContent = `${fmt.format(s.xp - s.floor)} de ${fmt.format(s.next - s.floor)} pontos para o nível ${s.level + 1}`;
+  p("points").textContent = fmt.format(s.xp);
+  p("streak").textContent = s.streak;
+  p("done").textContent = s.done;
+  p("rate").textContent = s.attempts ? `${Math.round((s.ok / s.attempts) * 100)}%` : "-";
+  p("ach").innerHTML = `${s.unlocked.size}<small>de ${ACHIEVEMENTS.length}</small>`;
+  $("#achievements .badges").replaceChildren(...ACHIEVEMENTS.map(a => {
+    const el = document.createElement("div");
+    const ok = s.unlocked.has(a.id);
+    el.className = `ach${ok ? "" : " locked"}`;
+    el.innerHTML = `<span class="mark"></span><div><div class="t"></div><div class="d"></div></div>`;
+    $(".mark", el).textContent = ok ? "✓" : "○";
+    $(".t", el).textContent = a.title;
+    $(".d", el).textContent = a.desc;
+    return el;
+  }));
+  $("#player").hidden = $("#achievements").hidden = false;
+}
+
+function toast(title, text = "") {
+  const el = document.createElement("div");
+  el.className = "toast";
+  el.append(Object.assign(document.createElement("b"), { textContent: title }));
+  if (text) el.append(text);
+  $("#toasts").append(el);
+  setTimeout(() => { el.classList.add("out"); setTimeout(() => el.remove(), 350); }, 4200);
+}
+
+// Recalcula a partir do histórico. Com `celebrate`, anuncia o que mudou desde o último cálculo.
+async function refreshGame(celebrate = false) {
+  let data;
+  try {
+    data = await (await fetch("/api/history?limit=500")).json();
+  } catch { return null; }
+  if (!data.enabled) return null;
+  const s = computeGame(data.items);
+  const before = game;
+  game = s;
+  renderGame(s);
+  if (!celebrate || !before) return s;
+  const gained = s.xp - before.xp;
+  if (gained > 0) toast(`+${gained} pontos`, `Total acumulado: ${fmt.format(s.xp)}`);
+  if (s.level > before.level) toast(`Nível ${s.level} alcançado`, s.title);
+  for (const a of ACHIEVEMENTS) {
+    if (s.unlocked.has(a.id) && !before.unlocked.has(a.id)) toast(`Marco atingido: ${a.title}`, a.desc);
+  }
+  return { state: s, gained };
+}
+
+function showReward(target, gained) {
+  if (!gained || !target) return;
+  target.append(Object.assign(document.createElement("span"), { className: "reward", textContent: `+${gained} pontos` }));
+}
+
 loadSteps();
 loadConfig();
+refreshGame();
 </script>
 </body>
 </html>

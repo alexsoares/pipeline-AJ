@@ -79,6 +79,14 @@ Regras:
 - Não faça commit, push nem troque de branch.
 - Ao final, resuma objetivamente o que foi alterado e por quê."""
 
+# A chave do .env (carregado no processo por load_settings) é do classificador. Se chegasse ao `claude`, ele a
+# usaria no lugar do login do usuário (assinatura) e cada implementação seria cobrada na API.
+_ENV_WITHHELD = ("ANTHROPIC_API_KEY",)
+
+
+def _child_env() -> dict[str, str]:
+    return {name: value for name, value in os.environ.items() if name not in _ENV_WITHHELD}
+
 
 class ClaudeCodeRunner:
     def __init__(self, settings: ClaudeCodeSettings) -> None:
@@ -143,6 +151,7 @@ class ClaudeCodeRunner:
                 text=True,
                 bufsize=1,
                 start_new_session=True,
+                env=_child_env(),
             )
 
         result: dict[str, dict] = {}
